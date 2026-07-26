@@ -210,6 +210,12 @@ private struct PaneTabContent: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if viewModel.isAIAssistantVisible && viewModel.isAIAssistantAvailable {
+                AIInputBar(viewModel: viewModel)
+
+                Divider()
+            }
+
             PathBarView(
                 location: viewModel.location,
                 isFocused: isFocused,
@@ -252,6 +258,9 @@ private struct PaneTabContent: View {
             if let batchItems = viewModel.batchRenameItems {
                 BatchRenameSheet(items: batchItems, viewModel: viewModel)
             }
+        }
+        .sheet(item: $viewModel.aiPlanPreview) { preview in
+            AIPlanPreviewSheet(preview: preview, viewModel: viewModel)
         }
         .alert("Error", isPresented: showErrorBinding) {
             Button("OK", role: .cancel) {}

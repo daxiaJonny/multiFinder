@@ -143,6 +143,7 @@ struct PathBarView: View {
         switch location {
         case .recents: return "clock.arrow.circlepath"
         case .search: return "magnifyingglass"
+        case .aiSearch: return "sparkles"
         case .directory: return "folder"
         }
     }
