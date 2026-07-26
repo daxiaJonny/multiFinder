@@ -15,6 +15,20 @@ targets:
     platform: macOS
     sources:
       - path: MultiFinder
+    dependencies:
+      - target: mfd
+        embed: false
+    postBuildScripts:
+      - name: Embed mfd CLI
+        script: |
+          HELPERS_DIR="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers"
+          /bin/mkdir -p "$HELPERS_DIR"
+          /usr/bin/ditto "$BUILT_PRODUCTS_DIR/mfd" "$HELPERS_DIR/mfd"
+          /bin/chmod 755 "$HELPERS_DIR/mfd"
+        inputFiles:
+          - $(BUILT_PRODUCTS_DIR)/mfd
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/mfd
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.multifinder.app
@@ -29,6 +43,16 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         COMBINE_HIDPI_IMAGES: YES
         ENABLE_HARDENED_RUNTIME: NO
+  mfd:
+    type: tool
+    platform: macOS
+    sources:
+      - path: MFDCLI
+    settings:
+      base:
+        PRODUCT_NAME: mfd
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
   MultiFinderTests:
     type: bundle.unit-test
     platform: macOS

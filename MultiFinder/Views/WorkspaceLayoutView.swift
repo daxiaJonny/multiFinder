@@ -69,6 +69,7 @@ struct WorkspaceLayoutView: View {
                     viewModel: pane,
                     layoutManager: layoutManager,
                     isFocused: layoutManager.focusedPaneID == pane.id,
+                    isHighlighted: layoutManager.highlightedPaneID == pane.id,
                     onFocus: { layoutManager.focusedPaneID = pane.id }
                 )
                 .frame(

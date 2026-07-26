@@ -5,6 +5,7 @@ DerivedData/
 xcuserdata/
 *.xcodeproj/xcuserdata/
 *.xcworkspace/xcuserdata/
+*.profraw
 
 # Local experiments
 cursor_dump

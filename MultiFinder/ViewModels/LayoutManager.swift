@@ -98,6 +98,9 @@ final class LayoutManager: ObservableObject {
     }
     @Published private(set) var serializedState: String
     @Published var sidebarWidth: Double
+    @Published private(set) var highlightedPaneID: UUID? = nil
+
+    private var highlightTask: Task<Void, Never>?
 
     init(serializedState: String = "") {
         self.serializedState = serializedState
@@ -126,8 +129,51 @@ final class LayoutManager: ObservableObject {
         rows.reduce(0) { $0 + $1.panes.count }
     }
 
+    @discardableResult
+    func openExternalPath(_ url: URL) -> Bool {
+        let targetURL = url.standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard targetURL.isFileURL,
+              FileManager.default.fileExists(atPath: targetURL.path, isDirectory: &isDirectory) else {
+            focusedPane?.errorMessage = "The requested path does not exist."
+            return false
+        }
+
+        if isDirectory.boolValue,
+           let pane = allPanes.first(where: { $0.currentURL == targetURL }) {
+            focusAndHighlight(pane)
+            return true
+        }
+
+        let parentURL = targetURL.deletingLastPathComponent()
+        if let pane = allPanes.first(where: { $0.currentURL == parentURL }) {
+            if isDirectory.boolValue {
+                pane.navigate(to: targetURL)
+            } else {
+                pane.navigateToFile(targetURL)
+            }
+            focusAndHighlight(pane)
+            return true
+        }
+
+        guard let sourcePaneID = focusedPaneID ?? allPanes.first?.id else { return false }
+        addPaneRight(of: sourcePaneID)
+        guard let newPane = focusedPane else { return false }
+        if isDirectory.boolValue {
+            newPane.navigate(to: targetURL)
+        } else {
+            newPane.navigateToFile(targetURL)
+        }
+        save()
+        return true
+    }
+
     func findPane(id: UUID) -> FileBrowserViewModel? {
         rows.lazy.flatMap(\.panes).first { $0.id == id }
+    }
+
+    private var allPanes: [FileBrowserViewModel] {
+        rows.flatMap(\.panes)
     }
 
     func addPaneRight(of paneID: UUID) {
@@ -212,6 +258,16 @@ final class LayoutManager: ObservableObject {
         serializedState = Self.encode(makeState()) ?? serializedState
     }
 
+    @discardableResult
+    func applyTemplate(_ state: LayoutState) -> Bool {
+        guard let restored = Self.restore(state) else { return false }
+        rows = restored.rows
+        sidebarWidth = restored.sidebarWidth
+        focusedPaneID = restored.focusedPaneID
+        save()
+        return true
+    }
+
     func makeState() -> LayoutState {
         var focusedIndex = 0
         var flatIndex = 0
@@ -239,6 +295,32 @@ final class LayoutManager: ObservableObject {
         )
     }
 
+    func makeTemplateState() -> LayoutState {
+        let currentState = makeState()
+        let rows = currentState.rows.map { row in
+            RowState(
+                panes: row.panes.map { pane in
+                    PaneState(
+                        location: pane.location,
+                        sortField: pane.sortField,
+                        sortAscending: pane.sortAscending,
+                        showHiddenFiles: pane.showHiddenFiles,
+                        backHistory: [],
+                        forwardHistory: []
+                    )
+                },
+                paneWeights: row.paneWeights,
+                heightWeight: row.heightWeight
+            )
+        }
+        return LayoutState(
+            version: LayoutState.currentVersion,
+            rows: rows,
+            focusedIndex: currentState.focusedIndex,
+            sidebarWidth: currentState.sidebarWidth
+        )
+    }
+
     nonisolated static func encode(_ state: LayoutState) -> String? {
         guard let data = try? JSONEncoder().encode(state) else { return nil }
         return data.base64EncodedString()
@@ -248,8 +330,14 @@ final class LayoutManager: ObservableObject {
         guard !encoded.isEmpty,
               let data = Data(base64Encoded: encoded),
               let state = try? JSONDecoder().decode(LayoutState.self, from: data),
-              (2...LayoutState.currentVersion).contains(state.version) else { return nil }
+              isUsable(state) else { return nil }
         return state
+    }
+
+    nonisolated static func isUsable(_ state: LayoutState) -> Bool {
+        (2...LayoutState.currentVersion).contains(state.version)
+            && !state.rows.isEmpty
+            && state.rows.allSatisfy { !$0.panes.isEmpty }
     }
 
     private func clonedPane(from pane: FileBrowserViewModel?) -> FileBrowserViewModel {
@@ -259,6 +347,17 @@ final class LayoutManager: ObservableObject {
             sortAscending: pane?.sortAscending ?? true,
             showHiddenFiles: pane?.showHiddenFiles ?? false
         )
+    }
+
+    private func focusAndHighlight(_ pane: FileBrowserViewModel) {
+        focusedPaneID = pane.id
+        highlightedPaneID = pane.id
+        highlightTask?.cancel()
+        highlightTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled, self?.highlightedPaneID == pane.id else { return }
+            self?.highlightedPaneID = nil
+        }
     }
 
     private func findPaneLocation(id: UUID) -> (rowIndex: Int, paneIndex: Int)? {

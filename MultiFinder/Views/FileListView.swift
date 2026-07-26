@@ -5,14 +5,15 @@ import UniformTypeIdentifiers
 struct FileListView: View {
     @ObservedObject var viewModel: FileBrowserViewModel
     @ObservedObject private var clipboard = FileClipboard.shared
+    let onFocus: () -> Void
     let onQuickLook: () -> Void
     let onRename: (FileItem) -> Void
 
     var body: some View {
         Table(
             of: FileItem.self,
-            selection: $viewModel.selectedItems,
-            sortOrder: $viewModel.sortOrder
+            selection: focusedSelection,
+            sortOrder: focusedSortOrder
         ) {
             TableColumn("Name", sortUsing: FileItemComparator(field: .name)) { item in
                 HStack(spacing: 6) {
@@ -63,6 +64,7 @@ struct FileListView: View {
             open(selection: selection)
         }
         .onKeyPress(.space) {
+            onFocus()
             onQuickLook()
             return .handled
         }
@@ -71,6 +73,7 @@ struct FileListView: View {
             return .handled
         }
         .onKeyPress(.delete) {
+            onFocus()
             viewModel.deleteSelected()
             return .handled
         }
@@ -87,6 +90,7 @@ struct FileListView: View {
         .disabled(selectedItems.isEmpty)
 
         Button("Reveal in Finder") {
+            onFocus()
             viewModel.selectForContextMenu(selection)
             NSWorkspace.shared.activateFileViewerSelecting(selectedItems.map(\.url))
         }
@@ -95,12 +99,14 @@ struct FileListView: View {
         Divider()
 
         Button("Copy") {
+            onFocus()
             viewModel.selectForContextMenu(selection)
             clipboard.copy(urls: selectedItems.map(\.url))
         }
         .disabled(selectedItems.isEmpty)
 
         Button("Cut") {
+            onFocus()
             viewModel.selectForContextMenu(selection)
             clipboard.cut(urls: selectedItems.map(\.url))
         }
@@ -115,12 +121,14 @@ struct FileListView: View {
 
         Button("Rename…") {
             guard let item = selectedItems.first else { return }
+            onFocus()
             viewModel.selectForContextMenu(selection)
             onRename(item)
         }
         .disabled(selectedItems.count != 1)
 
         Button("Move to Trash", role: .destructive) {
+            onFocus()
             viewModel.selectForContextMenu(selection)
             viewModel.deleteSelected()
         }
@@ -132,6 +140,7 @@ struct FileListView: View {
     }
 
     private func open(selection: Set<FileItem.ID>) {
+        onFocus()
         let selectedItems = items(for: selection)
         if selectedItems.count == 1, let item = selectedItems.first {
             viewModel.openItem(item)
@@ -141,6 +150,7 @@ struct FileListView: View {
     }
 
     private func pasteFromClipboard() {
+        onFocus()
         guard let payload = clipboard.payload else { return }
         if payload.isCut {
             viewModel.moveItems(from: payload.urls) { result in
@@ -156,5 +166,25 @@ struct FileListView: View {
         guard !completedSources.isEmpty else { return }
         let remainingURLs = payload.urls.filter { !completedSources.contains($0.standardizedFileURL) }
         clipboard.consumeIfUnchanged(payload, remainingURLs: remainingURLs)
+    }
+
+    private var focusedSelection: Binding<Set<FileItem.ID>> {
+        Binding(
+            get: { viewModel.selectedItems },
+            set: { selection in
+                onFocus()
+                viewModel.selectedItems = selection
+            }
+        )
+    }
+
+    private var focusedSortOrder: Binding<[FileItemComparator]> {
+        Binding(
+            get: { viewModel.sortOrder },
+            set: { sortOrder in
+                onFocus()
+                viewModel.sortOrder = sortOrder
+            }
+        )
     }
 }

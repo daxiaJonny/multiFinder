@@ -42,6 +42,10 @@ struct ContentView: View {
         .onAppear {
             onPersist(layoutManager.serializedState)
         }
+        .onOpenURL { url in
+            guard let request = ExternalOpenRequest(url: url) else { return }
+            layoutManager.openExternalPath(request.targetURL)
+        }
     }
 }
 
@@ -49,12 +53,41 @@ private struct WorkspaceSurface: View {
     @ObservedObject var layoutManager: LayoutManager
     @ObservedObject var focusedPane: FileBrowserViewModel
     @ObservedObject private var operationService = FileOperationService.shared
+    @ObservedObject private var templateStore = WorkspaceTemplateStore.shared
+    @State private var isNamingTemplate = false
+    @State private var templateName = ""
+    @State private var templatePendingDeletion: WorkspaceTemplate?
 
     var body: some View {
         WorkspaceLayoutView(layoutManager: layoutManager, focusedPane: focusedPane)
         .navigationTitle(focusedPane.title)
         .toolbar {
-            BrowserToolbar(layoutManager: layoutManager, pane: focusedPane)
+            BrowserToolbar(
+                layoutManager: layoutManager,
+                pane: focusedPane,
+                onSaveTemplate: beginSavingTemplate,
+                onDeleteTemplate: { templatePendingDeletion = $0 }
+            )
+        }
+        .alert("Save Workspace Template", isPresented: $isNamingTemplate) {
+            TextField("Template Name", text: $templateName)
+            Button("Cancel", role: .cancel) {}
+            Button("Save", action: saveTemplate)
+                .disabled(templateName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .confirmationDialog(
+            "Delete Workspace Template?",
+            isPresented: deleteTemplatePresented,
+            titleVisibility: .visible,
+            presenting: templatePendingDeletion
+        ) { template in
+            Button("Delete \(template.name)", role: .destructive) {
+                templateStore.remove(id: template.id)
+                templatePendingDeletion = nil
+            }
+            Button("Cancel", role: .cancel) {
+                templatePendingDeletion = nil
+            }
         }
         .confirmationDialog(
             "An Item Already Exists",
@@ -98,6 +131,22 @@ private struct WorkspaceSurface: View {
             }
         )
     }
+
+    private var deleteTemplatePresented: Binding<Bool> {
+        Binding(
+            get: { templatePendingDeletion != nil },
+            set: { if !$0 { templatePendingDeletion = nil } }
+        )
+    }
+
+    private func beginSavingTemplate() {
+        templateName = "Workspace \(templateStore.templates.count + 1)"
+        isNamingTemplate = true
+    }
+
+    private func saveTemplate() {
+        templateStore.save(name: templateName, layoutState: layoutManager.makeTemplateState())
+    }
 }
 
 private struct BrowserToolbar: ToolbarContent {
@@ -106,6 +155,10 @@ private struct BrowserToolbar: ToolbarContent {
     @ObservedObject private var clipboard = FileClipboard.shared
     @ObservedObject private var operationService = FileOperationService.shared
     @ObservedObject private var favoritesStore = FavoritesStore.shared
+    @ObservedObject private var templateStore = WorkspaceTemplateStore.shared
+    private let iTermService = ITermService.shared
+    let onSaveTemplate: () -> Void
+    let onDeleteTemplate: (WorkspaceTemplate) -> Void
 
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
@@ -146,6 +199,12 @@ private struct BrowserToolbar: ToolbarContent {
             }
             .help("Toggle Hidden Files")
 
+            Button(action: openInITerm) {
+                Image(systemName: "terminal")
+            }
+            .disabled(pane.currentURL == nil || !iTermService.isAvailable)
+            .help(iTermService.isAvailable ? "Open in iTerm2" : "iTerm2 Not Installed")
+
             Button(action: paste) {
                 Image(systemName: "doc.on.clipboard")
             }
@@ -174,24 +233,77 @@ private struct BrowserToolbar: ToolbarContent {
             .help("Operation History")
 
             Menu {
-                Button("Split Right") {
+                Button("Save Current Workspace…", action: onSaveTemplate)
+
+                if templateStore.templates.isEmpty {
+                    Divider()
+                    Text("No Saved Templates")
+                } else {
+                    Divider()
+                    ForEach(templateStore.templates) { template in
+                        Button(template.name) {
+                            layoutManager.applyTemplate(template.layoutState)
+                        }
+                    }
+                    Divider()
+                    Menu("Delete Template") {
+                        ForEach(templateStore.templates) { template in
+                            Button(template.name, role: .destructive) {
+                                onDeleteTemplate(template)
+                            }
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "square.grid.2x2")
+            }
+            .help("Workspace Templates")
+
+            Menu {
+                Button {
                     layoutManager.addPaneRight(of: pane.id)
+                } label: {
+                    Image(systemName: "rectangle.righthalf.inset.filled")
+                        .accessibilityLabel("Split Right")
                 }
-                Button("Split Left") {
+                .help("Split Right")
+
+                Button {
                     layoutManager.addPaneLeft(of: pane.id)
+                } label: {
+                    Image(systemName: "rectangle.lefthalf.inset.filled")
+                        .accessibilityLabel("Split Left")
                 }
+                .help("Split Left")
+
                 Divider()
-                Button("Add Row Below") {
+
+                Button {
                     layoutManager.addRowBelow(of: pane.id)
+                } label: {
+                    Image(systemName: "rectangle.bottomhalf.inset.filled")
+                        .accessibilityLabel("Add Row Below")
                 }
-                Button("Add Row Above") {
+                .help("Add Row Below")
+
+                Button {
                     layoutManager.addRowAbove(of: pane.id)
+                } label: {
+                    Image(systemName: "rectangle.tophalf.inset.filled")
+                        .accessibilityLabel("Add Row Above")
                 }
+                .help("Add Row Above")
+
                 Divider()
-                Button("Remove Pane", role: .destructive) {
+
+                Button(role: .destructive) {
                     layoutManager.removePane(pane.id)
+                } label: {
+                    Image(systemName: "rectangle.badge.minus")
+                        .accessibilityLabel("Remove Pane")
                 }
                 .disabled(layoutManager.totalPaneCount <= 1)
+                .help("Remove Pane")
             } label: {
                 Image(systemName: "plus.square.on.square")
             }
@@ -225,5 +337,14 @@ private struct BrowserToolbar: ToolbarContent {
     private func toggleFavorite() {
         guard let url = pane.currentURL else { return }
         favoritesStore.toggle(url)
+    }
+
+    private func openInITerm() {
+        guard let url = pane.currentURL else { return }
+        do {
+            try iTermService.openDirectory(url)
+        } catch {
+            pane.errorMessage = error.localizedDescription
+        }
     }
 }

@@ -5,6 +5,7 @@ struct FileBrowserPane: View {
     @ObservedObject var viewModel: FileBrowserViewModel
     @ObservedObject var layoutManager: LayoutManager
     let isFocused: Bool
+    let isHighlighted: Bool
     let onFocus: () -> Void
 
     @State private var renameTarget: FileItem?
@@ -25,6 +26,7 @@ struct FileBrowserPane: View {
                     viewModel.navigateToFile(url)
                 },
                 onRefresh: {
+                    onFocus()
                     viewModel.refresh()
                 }
             )
@@ -33,6 +35,7 @@ struct FileBrowserPane: View {
 
             FileListView(
                 viewModel: viewModel,
+                onFocus: onFocus,
                 onQuickLook: {
                     QuickLookManager.shared.preview(urls: viewModel.selectedItemURLs)
                 },
@@ -40,9 +43,7 @@ struct FileBrowserPane: View {
                     renameTarget = item
                 }
             )
-            .onTapGesture {
-                onFocus()
-            }
+            .simultaneousGesture(TapGesture().onEnded { _ in onFocus() })
 
             Divider()
 
@@ -52,11 +53,15 @@ struct FileBrowserPane: View {
         .overlay(
             RoundedRectangle(cornerRadius: 0)
                 .stroke(
-                    isDropTargeted ? Color.accentColor :
-                        (isFocused ? Color.accentColor.opacity(0.4) : Color(nsColor: .separatorColor)),
-                    lineWidth: isDropTargeted ? 2 : (isFocused ? 1.5 : 0.5)
+                    paneBorderColor,
+                    lineWidth: paneBorderWidth
+                )
+                .shadow(
+                    color: isHighlighted ? Color.accentColor.opacity(0.7) : .clear,
+                    radius: isHighlighted ? 7 : 0
                 )
         )
+        .animation(.easeInOut(duration: 0.2), value: isHighlighted)
         .onDrop(of: [UTType.fileURL], isTargeted: $isDropTargeted) { providers in
             handleDrop(providers: providers)
         }
@@ -151,8 +156,18 @@ struct FileBrowserPane: View {
         )
     }
 
+    private var paneBorderColor: Color {
+        if isDropTargeted || isHighlighted { return .accentColor }
+        return isFocused ? Color.accentColor.opacity(0.4) : Color(nsColor: .separatorColor)
+    }
+
+    private var paneBorderWidth: Double {
+        isDropTargeted || isHighlighted ? 3 : (isFocused ? 1.5 : 0.5)
+    }
+
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
         guard viewModel.canCreateItems else { return false }
+        onFocus()
         var handled = false
         for provider in providers {
             guard provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) else { continue }
