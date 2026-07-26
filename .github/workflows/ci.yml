@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        run: xcodegen generate
+      - name: Test
+        run: >-
+          xcodebuild
+          -project MultiFinder.xcodeproj
+          -scheme MultiFinder
+          -configuration Debug
+          CODE_SIGNING_ALLOWED=NO
+          test

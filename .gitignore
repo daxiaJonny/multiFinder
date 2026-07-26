@@ -1,0 +1,22 @@
+# Xcode and XcodeGen output
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Local experiments
+cursor_dump
+cursor_test
+cursor_test2
+cursor_test3
+cursor_test4
+cursor_dump.swift
+cursor_test.swift
+cursor_test2.swift
+cursor_test3.swift
+cursor_test4.swift
+
+# macOS
+.DS_Store
