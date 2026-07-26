@@ -32,6 +32,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     }
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
+    @Published var batchRenameItems: [FileItem]?
 
     private(set) var backHistory: [BrowserLocation]
     private(set) var forwardHistory: [BrowserLocation]
@@ -50,7 +51,11 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     var sortAscending: Bool { sortOrder.first?.order != .reverse }
 
     var selectedItemURLs: [URL] {
-        items.filter { selectedItems.contains($0.id) }.map(\.url)
+        selectedFileItems.map(\.url)
+    }
+
+    var selectedFileItems: [FileItem] {
+        items.filter { selectedItems.contains($0.id) }
     }
 
     var selectedItem: FileItem? {
@@ -421,6 +426,44 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
 
         let destination = item.url.deletingLastPathComponent().appendingPathComponent(newName)
         operationService.renameDetailed(item.url, to: destination) { [weak self] result in
+            if result.status == .completed {
+                self?.pendingSelectionURL = result.completedOutcomes.first?.destination
+            }
+            self?.finishOperation(result)
+        }
+    }
+
+    func requestBatchRename() {
+        let selection = selectedFileItems
+        guard selection.count >= 2 else { return }
+        guard let parent = selection.first?.url.deletingLastPathComponent(),
+              selection.allSatisfy({ $0.url.deletingLastPathComponent() == parent }) else {
+            errorMessage = "Items can only be renamed together when they are in the same folder."
+            return
+        }
+        batchRenameItems = selection
+    }
+
+    func batchRename(_ pairs: [BatchRenamePair]) {
+        guard !pairs.isEmpty else { return }
+        operationService.batchRenameDetailed(pairs) { [weak self] result in
+            self?.finishOperation(result)
+        }
+    }
+
+    func compressItems(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        operationService.compressDetailed(urls) { [weak self] result in
+            if result.status == .completed {
+                self?.pendingSelectionURL = result.completedOutcomes.first?.destination
+            }
+            self?.finishOperation(result)
+        }
+    }
+
+    func extractItems(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        operationService.extractDetailed(urls) { [weak self] result in
             if result.status == .completed {
                 self?.pendingSelectionURL = result.completedOutcomes.first?.destination
             }

@@ -69,6 +69,14 @@ struct MultiFinderApp: App {
                 }
                 .keyboardShortcut("a", modifiers: .command)
                 .disabled(layoutManager == nil)
+
+                Divider()
+
+                Button("Rename Selected Items…") {
+                    layoutManager?.focusedPane?.requestBatchRename()
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled((layoutManager?.focusedPane?.selectedItems.count ?? 0) < 2)
             }
 
             CommandGroup(after: .toolbar) {

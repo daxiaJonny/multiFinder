@@ -127,6 +127,32 @@ struct FileListView: View {
         }
         .disabled(selectedItems.count != 1)
 
+        if selectedItems.count >= 2 {
+            Button("Rename \(selectedItems.count) Items…") {
+                onFocus()
+                viewModel.selectForContextMenu(selection)
+                viewModel.requestBatchRename()
+            }
+        }
+
+        Divider()
+
+        Button(compressTitle(for: selectedItems)) {
+            onFocus()
+            viewModel.selectForContextMenu(selection)
+            viewModel.compressItems(selectedItems.map(\.url))
+        }
+        .disabled(selectedItems.isEmpty || !haveSameParent(selectedItems))
+
+        if !selectedItems.isEmpty,
+           selectedItems.allSatisfy({ FileOperationService.isExtractableArchive($0.url) && !$0.isDirectory }) {
+            Button(extractTitle(for: selectedItems)) {
+                onFocus()
+                viewModel.selectForContextMenu(selection)
+                viewModel.extractItems(selectedItems.map(\.url))
+            }
+        }
+
         Button("Move to Trash", role: .destructive) {
             onFocus()
             viewModel.selectForContextMenu(selection)
@@ -137,6 +163,19 @@ struct FileListView: View {
 
     private func items(for ids: Set<FileItem.ID>) -> [FileItem] {
         viewModel.items.filter { ids.contains($0.id) }
+    }
+
+    private func compressTitle(for items: [FileItem]) -> String {
+        items.count == 1 ? "Compress “\(items[0].name)”" : "Compress \(items.count) Items"
+    }
+
+    private func extractTitle(for items: [FileItem]) -> String {
+        items.count == 1 ? "Extract “\(items[0].name)”" : "Extract \(items.count) Archives"
+    }
+
+    private func haveSameParent(_ items: [FileItem]) -> Bool {
+        guard let parent = items.first?.url.deletingLastPathComponent() else { return false }
+        return items.allSatisfy { $0.url.deletingLastPathComponent() == parent }
     }
 
     private func open(selection: Set<FileItem.ID>) {

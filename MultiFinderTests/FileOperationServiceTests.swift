@@ -364,6 +364,72 @@ final class FileOperationServiceTests: XCTestCase {
         XCTAssertTrue(service.canUndo)
     }
 
+    func testBatchRenameRenamesAllItemsAndUndoRestoresOriginalNames() async throws {
+        let firstSource = sourceDirectory.appendingPathComponent("IMG_001.jpg")
+        let secondSource = sourceDirectory.appendingPathComponent("IMG_002.jpg")
+        let firstDestination = sourceDirectory.appendingPathComponent("photo-001.jpg")
+        let secondDestination = sourceDirectory.appendingPathComponent("photo-002.jpg")
+        try Data("one".utf8).write(to: firstSource)
+        try Data("two".utf8).write(to: secondSource)
+
+        let result = await performDetailed { completion in
+            service.batchRenameDetailed(
+                [
+                    BatchRenamePair(source: firstSource, destination: firstDestination),
+                    BatchRenamePair(source: secondSource, destination: secondDestination)
+                ],
+                completion: completion
+            )
+        }
+        let recordID = try XCTUnwrap(service.history.first?.id)
+
+        XCTAssertEqual(result.status, .completed)
+        XCTAssertEqual(service.history.first?.kind, .batchRename)
+        XCTAssertEqual(try String(contentsOf: firstDestination), "one")
+        XCTAssertEqual(try String(contentsOf: secondDestination), "two")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: firstSource.path))
+        XCTAssertTrue(service.canUndo)
+
+        service.undo()
+        try await waitUntil {
+            self.service.activeOperation == nil &&
+                self.service.history.first(where: { $0.id == recordID })?.status == .undone
+        }
+
+        XCTAssertEqual(try String(contentsOf: firstSource), "one")
+        XCTAssertEqual(try String(contentsOf: secondSource), "two")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: firstDestination.path))
+        XCTAssertTrue(service.canRedo)
+    }
+
+    func testBatchRenameFailsItemWhoseDestinationExistsAndKeepsTheRest() async throws {
+        let firstSource = sourceDirectory.appendingPathComponent("a.txt")
+        let secondSource = sourceDirectory.appendingPathComponent("b.txt")
+        let firstDestination = sourceDirectory.appendingPathComponent("a-renamed.txt")
+        let secondDestination = sourceDirectory.appendingPathComponent("occupied.txt")
+        try Data("a".utf8).write(to: firstSource)
+        try Data("b".utf8).write(to: secondSource)
+        try Data("occupied".utf8).write(to: secondDestination)
+
+        let result = await performDetailed { completion in
+            service.batchRenameDetailed(
+                [
+                    BatchRenamePair(source: firstSource, destination: firstDestination),
+                    BatchRenamePair(source: secondSource, destination: secondDestination)
+                ],
+                completion: completion
+            )
+        }
+
+        XCTAssertEqual(result.status, .failed)
+        XCTAssertEqual(result.completedOutcomes.map(\.source), [firstSource])
+        XCTAssertEqual(result.failedOutcomes.map(\.source), [secondSource])
+        XCTAssertEqual(try String(contentsOf: firstDestination), "a")
+        XCTAssertEqual(try String(contentsOf: secondSource), "b")
+        XCTAssertEqual(try String(contentsOf: secondDestination), "occupied")
+        XCTAssertTrue(service.canUndo)
+    }
+
     private func perform(
         _ operation: @MainActor (@escaping (Result<Void, FileOperationError>) -> Void) -> Void
     ) async throws {
