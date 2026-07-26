@@ -14,6 +14,7 @@ enum BrowserLocation: Hashable, Codable, Sendable {
     case directory(URL)
     case recents
     case search(SearchQuery)
+    case aiSearch(root: URL, criteria: AISearchCriteria, title: String)
 
     var directoryURL: URL? {
         guard case .directory(let url) = self else { return nil }
@@ -28,6 +29,8 @@ enum BrowserLocation: Hashable, Codable, Sendable {
             return "Recents"
         case .search(let query):
             return query.text.isEmpty ? "Search" : "Search: \(query.text)"
+        case .aiSearch(_, _, let title):
+            return title.isEmpty ? "AI Search" : title
         }
     }
 
@@ -39,6 +42,8 @@ enum BrowserLocation: Hashable, Codable, Sendable {
             return "Recents"
         case .search(let query):
             return query.scope?.path ?? "This Mac"
+        case .aiSearch(let root, _, _):
+            return root.path
         }
     }
 

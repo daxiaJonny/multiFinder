@@ -33,6 +33,10 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
     @Published var batchRenameItems: [FileItem]?
+    @Published var isAIAssistantVisible = false
+    @Published private(set) var isAIPlanning = false
+    @Published var aiErrorMessage: String?
+    @Published var aiPlanPreview: AIPlanPreview?
 
     private(set) var backHistory: [BrowserLocation]
     private(set) var forwardHistory: [BrowserLocation]
@@ -64,9 +68,12 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     }
 
     private let operationService: FileOperationService
+    private let aiPlanner: any AIPlanner
+    let isAIAssistantAvailable: Bool
     private let directoryMonitor = DirectoryMonitor()
     private var loadTask: Task<Void, Never>?
     private var monitorRefreshTask: Task<Void, Never>?
+    private var aiPlanTask: Task<Void, Never>?
     private var loadGeneration: UInt64 = 0
     private var pendingSelectionURL: URL?
 
@@ -77,7 +84,9 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         showHiddenFiles: Bool = false,
         backHistory: [BrowserLocation] = [],
         forwardHistory: [BrowserLocation] = [],
-        operationService: FileOperationService = .shared
+        operationService: FileOperationService = .shared,
+        aiPlanner: any AIPlanner = PlaceholderAIPlanner(),
+        aiPlannerAvailable: Bool = PlaceholderAIPlanner().isAvailable
     ) {
         self.location = Self.normalized(location)
         self.sortOrder = [FileItemComparator(field: sortField, order: sortAscending ? .forward : .reverse)]
@@ -85,6 +94,8 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         self.backHistory = backHistory.map(Self.normalized)
         self.forwardHistory = forwardHistory.map(Self.normalized)
         self.operationService = operationService
+        self.aiPlanner = aiPlanner
+        self.isAIAssistantAvailable = aiPlannerAvailable
         configureDirectoryMonitor()
         reload()
     }
@@ -96,6 +107,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     deinit {
         loadTask?.cancel()
         monitorRefreshTask?.cancel()
+        aiPlanTask?.cancel()
     }
 
     // MARK: - Loading
@@ -122,6 +134,12 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
                 case .recents, .search:
                     let urls = try await metadataURLs(for: requestedLocation, includeHidden: includeHidden)
                     loadedItems = try await Self.makeItems(from: urls, includeHidden: includeHidden)
+                case .aiSearch(let root, let criteria, _):
+                    loadedItems = try await Self.loadAISearch(
+                        root: root,
+                        criteria: criteria,
+                        includeHidden: includeHidden
+                    )
                 }
 
                 try Task.checkCancellation()
@@ -214,6 +232,56 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         }
     }
 
+    private nonisolated static func loadAISearch(
+        root: URL,
+        criteria: AISearchCriteria,
+        includeHidden: Bool
+    ) async throws -> [FileItem] {
+        let matcher = AISearchMatcher(criteria: criteria)
+        let worker = Task.detached(priority: .userInitiated) {
+            try Self.enumerateAISearch(root: root, matcher: matcher, includeHidden: includeHidden)
+        }
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+    }
+
+    private nonisolated static func enumerateAISearch(
+        root: URL,
+        matcher: AISearchMatcher,
+        includeHidden: Bool
+    ) throws -> [FileItem] {
+        var options: FileManager.DirectoryEnumerationOptions = [.skipsPackageDescendants]
+        if !includeHidden { options.insert(.skipsHiddenFiles) }
+        if !matcher.isRecursive { options.insert(.skipsSubdirectoryDescendants) }
+
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [
+                .isDirectoryKey, .fileSizeKey, .contentModificationDateKey,
+                .isHiddenKey, .isSymbolicLinkKey, .isPackageKey
+            ],
+            options: options
+        ) else {
+            throw FileOperationError(message: "The folder “\(root.lastPathComponent)” could not be searched.")
+        }
+
+        var items: [FileItem] = []
+        var scanned = 0
+        for case let url as URL in enumerator {
+            if scanned.isMultiple(of: 32) { try Task.checkCancellation() }
+            scanned += 1
+            let item = FileItem(url: url)
+            if matcher.matches(item) {
+                items.append(item)
+            }
+        }
+        try Task.checkCancellation()
+        return items
+    }
+
     private func metadataURLs(for location: BrowserLocation, includeHidden: Bool) async throws -> [URL] {
         let query = NSMetadataQuery()
 
@@ -234,7 +302,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
             if let scope = search.scope {
                 query.searchScopes = [scope.path]
             }
-        case .directory:
+        case .directory, .aiSearch:
             return []
         }
 
@@ -367,6 +435,8 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         case .directory(let url): return .directory(url.standardizedFileURL)
         case .recents: return .recents
         case .search(let query): return .search(SearchQuery(text: query.text, scope: query.scope))
+        case .aiSearch(let root, let criteria, let title):
+            return .aiSearch(root: root.standardizedFileURL, criteria: criteria, title: title)
         }
     }
 
@@ -505,6 +575,83 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         let urls = selectedItemURLs
         guard !urls.isEmpty else { return }
         NSWorkspace.shared.activateFileViewerSelecting(urls)
+    }
+
+    // MARK: - AI assistant
+
+    struct AIPlanPreview: Identifiable {
+        let id = UUID()
+        let plan: AIPlan
+        let validation: PlanValidationResult
+        let scopeRoot: URL
+    }
+
+    func toggleAIAssistant() {
+        guard isAIAssistantAvailable else { return }
+        isAIAssistantVisible.toggle()
+        if !isAIAssistantVisible {
+            cancelAIPlanning()
+            aiErrorMessage = nil
+        }
+    }
+
+    func submitAIInstruction(_ instruction: String) {
+        let trimmed = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !isAIPlanning else { return }
+        guard let scopeRoot = currentURL else {
+            aiErrorMessage = "The AI assistant can only work inside a folder."
+            return
+        }
+
+        aiPlanTask?.cancel()
+        isAIPlanning = true
+        aiErrorMessage = nil
+        let planner = aiPlanner
+
+        aiPlanTask = Task { [weak self] in
+            do {
+                let plan = try await planner.plan(AIPlanRequest(instruction: trimmed, scopeRoot: scopeRoot))
+                try Task.checkCancellation()
+                self?.handleAIPlan(plan, instruction: trimmed, scopeRoot: scopeRoot)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                self?.aiErrorMessage = error.localizedDescription
+            }
+            self?.isAIPlanning = false
+        }
+    }
+
+    func cancelAIPlanning() {
+        aiPlanTask?.cancel()
+        aiPlanTask = nil
+        isAIPlanning = false
+    }
+
+    func executeAIPlan(_ operations: [AIPlanOperation], scopeRoot: URL) {
+        guard !operations.isEmpty else { return }
+        operationService.aiOrganizeDetailed(operations, scopeRoot: scopeRoot) { [weak self] result in
+            self?.finishOperation(result)
+        }
+    }
+
+    private func handleAIPlan(_ plan: AIPlan, instruction: String, scopeRoot: URL) {
+        switch plan.kind {
+        case .search:
+            guard let criteria = plan.search else {
+                aiErrorMessage = "The search plan is missing its criteria."
+                return
+            }
+            navigate(to: .aiSearch(root: scopeRoot, criteria: criteria, title: instruction))
+        case .organize:
+            do {
+                let validation = try PlanValidator.validate(plan, scopeRoot: scopeRoot)
+                aiPlanPreview = AIPlanPreview(plan: plan, validation: validation, scopeRoot: scopeRoot)
+            } catch {
+                aiErrorMessage = error.localizedDescription
+            }
+        }
     }
 
     private func finishOperation(_ result: FileOperationResult) {

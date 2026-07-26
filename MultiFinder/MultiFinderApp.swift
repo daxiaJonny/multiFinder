@@ -114,6 +114,12 @@ struct MultiFinderApp: App {
                 }
                 .keyboardShortcut(".", modifiers: [.command, .shift])
                 .disabled(layoutManager == nil)
+
+                Button("AI Assistant…") {
+                    layoutManager?.focusedPane?.toggleAIAssistant()
+                }
+                .keyboardShortcut("a", modifiers: [.command, .shift])
+                .disabled(layoutManager?.focusedPane?.isAIAssistantAvailable != true)
             }
 
             CommandMenu("Go") {

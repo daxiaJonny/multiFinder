@@ -32,7 +32,7 @@ struct AIPlan: Codable, Sendable, Equatable {
     let operations: [AIPlanOperation]?
 }
 
-struct AISearchCriteria: Codable, Sendable, Equatable {
+struct AISearchCriteria: Codable, Sendable, Hashable {
     var nameContains: [String]?
     var extensions: [String]?
     var modifiedAfter: Date?
