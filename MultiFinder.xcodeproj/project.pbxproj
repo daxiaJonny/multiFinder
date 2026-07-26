@@ -94,7 +94,7 @@
 		F3DB8A9C48FD94E7A4741BE5 /* FileItemTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileItemTests.swift; sourceTree = "<group>"; };
 		F3EE0F6EB779A0C48C755723 /* FileItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileItem.swift; sourceTree = "<group>"; };
 		F6B70D849D3B3CDEC367A4D9 /* QuickLookManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickLookManager.swift; sourceTree = "<group>"; };
-		"TEMP_DCEBE2E7-A81C-4AD6-9748-5716B03B5C90" /* Signing.release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.release.xcconfig; sourceTree = "<group>"; };
+		"TEMP_BB4ABD8E-609D-4457-9365-1D3A8E4C0050" /* Signing.release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.release.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -204,12 +204,12 @@
 			path = Services;
 			sourceTree = "<group>";
 		};
-		"TEMP_01DB3E41-B534-4154-B40D-5CDE15B9A668" /* agent-a0ab8c264a163c42c */ = {
+		"TEMP_CE75E880-EB2C-4A75-88FE-B9B86BBB77A9" /* multiFinder */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_DCEBE2E7-A81C-4AD6-9748-5716B03B5C90" /* Signing.release.xcconfig */,
+				"TEMP_BB4ABD8E-609D-4457-9365-1D3A8E4C0050" /* Signing.release.xcconfig */,
 			);
-			path = "agent-a0ab8c264a163c42c";
+			path = multiFinder;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -453,7 +453,7 @@
 		};
 		666771FE6C9501D62E3BDAD2 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_DCEBE2E7-A81C-4AD6-9748-5716B03B5C90" /* Signing.release.xcconfig */;
+			baseConfigurationReference = "TEMP_BB4ABD8E-609D-4457-9365-1D3A8E4C0050" /* Signing.release.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;

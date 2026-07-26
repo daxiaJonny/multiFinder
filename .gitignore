@@ -24,3 +24,4 @@ cursor_test4.swift
 
 # macOS
 .DS_Store
+.claude/
