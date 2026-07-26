@@ -2,15 +2,37 @@ import Combine
 import Foundation
 import SwiftUI
 
+@MainActor
+final class BrowserPane: ObservableObject, Identifiable {
+    let id: UUID
+    @Published var tabs: [FileBrowserViewModel]
+    @Published var selectedTabIndex: Int
+
+    init(id: UUID = UUID(), tabs: [FileBrowserViewModel] = [], selectedTabIndex: Int = 0) {
+        let resolvedTabs = tabs.isEmpty ? [FileBrowserViewModel()] : tabs
+        self.id = id
+        self.tabs = resolvedTabs
+        self.selectedTabIndex = min(max(selectedTabIndex, 0), resolvedTabs.count - 1)
+    }
+
+    convenience init(tab: FileBrowserViewModel) {
+        self.init(tabs: [tab])
+    }
+
+    var selectedTab: FileBrowserViewModel {
+        tabs[min(max(selectedTabIndex, 0), tabs.count - 1)]
+    }
+}
+
 struct PaneRow: Identifiable {
     let id: UUID
-    var panes: [FileBrowserViewModel]
+    var panes: [BrowserPane]
     var paneWeights: [Double]
     var heightWeight: Double
 
     init(
         id: UUID = UUID(),
-        panes: [FileBrowserViewModel] = [],
+        panes: [BrowserPane] = [],
         paneWeights: [Double] = [],
         heightWeight: Double = 1
     ) {
@@ -28,13 +50,38 @@ struct PaneRow: Identifiable {
     }
 }
 
-struct PaneState: Codable, Equatable, Sendable {
+struct TabState: Codable, Equatable, Sendable {
     let location: BrowserLocation
     let sortField: SortField
     let sortAscending: Bool
     let showHiddenFiles: Bool
     let backHistory: [BrowserLocation]
     let forwardHistory: [BrowserLocation]
+}
+
+struct PaneState: Codable, Equatable, Sendable {
+    let tabs: [TabState]
+    let selectedTabIndex: Int
+
+    init(tabs: [TabState], selectedTabIndex: Int = 0) {
+        self.tabs = tabs
+        self.selectedTabIndex = selectedTabIndex
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case tabs, selectedTabIndex
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let tabs = try container.decodeIfPresent([TabState].self, forKey: .tabs) {
+            self.tabs = tabs
+            selectedTabIndex = try container.decodeIfPresent(Int.self, forKey: .selectedTabIndex) ?? 0
+        } else {
+            tabs = [try TabState(from: decoder)]
+            selectedTabIndex = 0
+        }
+    }
 }
 
 struct RowState: Codable, Equatable, Sendable {
@@ -61,7 +108,7 @@ struct RowState: Codable, Equatable, Sendable {
 }
 
 struct LayoutState: Codable, Equatable, Sendable {
-    static let currentVersion = 3
+    static let currentVersion = 4
 
     let version: Int
     let rows: [RowState]
@@ -110,8 +157,8 @@ final class LayoutManager: ObservableObject {
             focusedPaneID = restored.focusedPaneID
             sidebarWidth = restored.sidebarWidth
         } else {
-            let firstPane = FileBrowserViewModel()
-            let secondPane = FileBrowserViewModel()
+            let firstPane = BrowserPane(tab: FileBrowserViewModel())
+            let secondPane = BrowserPane(tab: FileBrowserViewModel())
             rows = [PaneRow(panes: [firstPane, secondPane])]
             focusedPaneID = firstPane.id
             sidebarWidth = 160
@@ -121,6 +168,10 @@ final class LayoutManager: ObservableObject {
     }
 
     var focusedPane: FileBrowserViewModel? {
+        focusedBrowserPane?.selectedTab
+    }
+
+    var focusedBrowserPane: BrowserPane? {
         guard let focusedPaneID else { return nil }
         return findPane(id: focusedPaneID)
     }
@@ -140,19 +191,24 @@ final class LayoutManager: ObservableObject {
         }
 
         if isDirectory.boolValue,
-           let pane = allPanes.first(where: { $0.currentURL == targetURL }) {
-            focusAndHighlight(pane)
+           let match = firstTab(where: { $0.currentURL == targetURL }) {
+            match.pane.selectedTabIndex = match.tabIndex
+            focusAndHighlight(match.pane)
+            save()
             return true
         }
 
         let parentURL = targetURL.deletingLastPathComponent()
-        if let pane = allPanes.first(where: { $0.currentURL == parentURL }) {
+        if let match = firstTab(where: { $0.currentURL == parentURL }) {
+            let tab = match.pane.tabs[match.tabIndex]
             if isDirectory.boolValue {
-                pane.navigate(to: targetURL)
+                tab.navigate(to: targetURL)
             } else {
-                pane.navigateToFile(targetURL)
+                tab.navigateToFile(targetURL)
             }
-            focusAndHighlight(pane)
+            match.pane.selectedTabIndex = match.tabIndex
+            focusAndHighlight(match.pane)
+            save()
             return true
         }
 
@@ -168,12 +224,24 @@ final class LayoutManager: ObservableObject {
         return true
     }
 
-    func findPane(id: UUID) -> FileBrowserViewModel? {
+    func findPane(id: UUID) -> BrowserPane? {
         rows.lazy.flatMap(\.panes).first { $0.id == id }
     }
 
-    private var allPanes: [FileBrowserViewModel] {
+    private var allPanes: [BrowserPane] {
         rows.flatMap(\.panes)
+    }
+
+    private func firstTab(where predicate: (FileBrowserViewModel) -> Bool) -> (pane: BrowserPane, tabIndex: Int)? {
+        if let pane = allPanes.first(where: { predicate($0.selectedTab) }) {
+            return (pane, pane.selectedTabIndex)
+        }
+        for pane in allPanes {
+            if let tabIndex = pane.tabs.firstIndex(where: predicate) {
+                return (pane, tabIndex)
+            }
+        }
+        return nil
     }
 
     func addPaneRight(of paneID: UUID) {
@@ -235,6 +303,59 @@ final class LayoutManager: ObservableObject {
         save()
     }
 
+    var canCloseTab: Bool {
+        guard let pane = focusedBrowserPane else { return false }
+        return pane.tabs.count > 1 || totalPaneCount > 1
+    }
+
+    func newTab(in paneID: UUID) {
+        guard let pane = findPane(id: paneID) else { return }
+        let newTab = clonedTab(from: pane.selectedTab)
+        pane.tabs.insert(newTab, at: pane.selectedTabIndex + 1)
+        pane.selectedTabIndex += 1
+        focusedPaneID = paneID
+        save()
+    }
+
+    func closeTab(in paneID: UUID) {
+        guard let pane = findPane(id: paneID) else { return }
+        closeTab(at: pane.selectedTabIndex, in: paneID)
+    }
+
+    func closeTab(at index: Int, in paneID: UUID) {
+        guard let pane = findPane(id: paneID), pane.tabs.indices.contains(index) else { return }
+        if pane.tabs.count == 1 {
+            removePane(paneID)
+            return
+        }
+        pane.tabs.remove(at: index)
+        if index < pane.selectedTabIndex {
+            pane.selectedTabIndex -= 1
+        } else if index == pane.selectedTabIndex {
+            pane.selectedTabIndex = min(index, pane.tabs.count - 1)
+        }
+        save()
+    }
+
+    func selectTab(at index: Int, in paneID: UUID) {
+        guard let pane = findPane(id: paneID), pane.tabs.indices.contains(index) else { return }
+        pane.selectedTabIndex = index
+        focusedPaneID = paneID
+        save()
+    }
+
+    func selectNextTab(in paneID: UUID) {
+        guard let pane = findPane(id: paneID), pane.tabs.count > 1 else { return }
+        pane.selectedTabIndex = (pane.selectedTabIndex + 1) % pane.tabs.count
+        save()
+    }
+
+    func selectPreviousTab(in paneID: UUID) {
+        guard let pane = findPane(id: paneID), pane.tabs.count > 1 else { return }
+        pane.selectedTabIndex = (pane.selectedTabIndex + pane.tabs.count - 1) % pane.tabs.count
+        save()
+    }
+
     func focusPane(direction: FocusDirection) {
         guard let focusedPaneID, let location = findPaneLocation(id: focusedPaneID) else { return }
 
@@ -277,12 +398,17 @@ final class LayoutManager: ObservableObject {
                 defer { flatIndex += 1 }
                 if pane.id == focusedPaneID { focusedIndex = flatIndex }
                 return PaneState(
-                    location: pane.location,
-                    sortField: pane.sortField,
-                    sortAscending: pane.sortAscending,
-                    showHiddenFiles: pane.showHiddenFiles,
-                    backHistory: pane.backHistory,
-                    forwardHistory: pane.forwardHistory
+                    tabs: pane.tabs.map { tab in
+                        TabState(
+                            location: tab.location,
+                            sortField: tab.sortField,
+                            sortAscending: tab.sortAscending,
+                            showHiddenFiles: tab.showHiddenFiles,
+                            backHistory: tab.backHistory,
+                            forwardHistory: tab.forwardHistory
+                        )
+                    },
+                    selectedTabIndex: pane.selectedTabIndex
                 )
             }, paneWeights: row.paneWeights, heightWeight: row.heightWeight)
         }
@@ -301,12 +427,17 @@ final class LayoutManager: ObservableObject {
             RowState(
                 panes: row.panes.map { pane in
                     PaneState(
-                        location: pane.location,
-                        sortField: pane.sortField,
-                        sortAscending: pane.sortAscending,
-                        showHiddenFiles: pane.showHiddenFiles,
-                        backHistory: [],
-                        forwardHistory: []
+                        tabs: pane.tabs.map { tab in
+                            TabState(
+                                location: tab.location,
+                                sortField: tab.sortField,
+                                sortAscending: tab.sortAscending,
+                                showHiddenFiles: tab.showHiddenFiles,
+                                backHistory: [],
+                                forwardHistory: []
+                            )
+                        },
+                        selectedTabIndex: pane.selectedTabIndex
                     )
                 },
                 paneWeights: row.paneWeights,
@@ -337,19 +468,23 @@ final class LayoutManager: ObservableObject {
     nonisolated static func isUsable(_ state: LayoutState) -> Bool {
         (2...LayoutState.currentVersion).contains(state.version)
             && !state.rows.isEmpty
-            && state.rows.allSatisfy { !$0.panes.isEmpty }
+            && state.rows.allSatisfy { !$0.panes.isEmpty && $0.panes.allSatisfy { !$0.tabs.isEmpty } }
     }
 
-    private func clonedPane(from pane: FileBrowserViewModel?) -> FileBrowserViewModel {
+    private func clonedPane(from pane: BrowserPane?) -> BrowserPane {
+        BrowserPane(tab: clonedTab(from: pane?.selectedTab))
+    }
+
+    private func clonedTab(from tab: FileBrowserViewModel?) -> FileBrowserViewModel {
         FileBrowserViewModel(
-            location: pane?.location ?? .directory(FileManager.default.homeDirectoryForCurrentUser),
-            sortField: pane?.sortField ?? .name,
-            sortAscending: pane?.sortAscending ?? true,
-            showHiddenFiles: pane?.showHiddenFiles ?? false
+            location: tab?.location ?? .directory(FileManager.default.homeDirectoryForCurrentUser),
+            sortField: tab?.sortField ?? .name,
+            sortAscending: tab?.sortAscending ?? true,
+            showHiddenFiles: tab?.showHiddenFiles ?? false
         )
     }
 
-    private func focusAndHighlight(_ pane: FileBrowserViewModel) {
+    private func focusAndHighlight(_ pane: BrowserPane) {
         focusedPaneID = pane.id
         highlightedPaneID = pane.id
         highlightTask?.cancel()
@@ -403,17 +538,21 @@ final class LayoutManager: ObservableObject {
     }
 
     private static func restore(_ state: LayoutState) -> (rows: [PaneRow], focusedPaneID: UUID?, sidebarWidth: Double)? {
-        var allPanes: [FileBrowserViewModel] = []
+        var allPanes: [BrowserPane] = []
         let rows = state.rows.compactMap { rowState -> PaneRow? in
-            let panes = rowState.panes.map { paneState in
-                let pane = FileBrowserViewModel(
-                    location: sanitized(paneState.location),
-                    sortField: paneState.sortField,
-                    sortAscending: paneState.sortAscending,
-                    showHiddenFiles: paneState.showHiddenFiles,
-                    backHistory: paneState.backHistory.map(sanitized),
-                    forwardHistory: paneState.forwardHistory.map(sanitized)
-                )
+            let panes = rowState.panes.compactMap { paneState -> BrowserPane? in
+                let tabs = paneState.tabs.map { tabState in
+                    FileBrowserViewModel(
+                        location: sanitized(tabState.location),
+                        sortField: tabState.sortField,
+                        sortAscending: tabState.sortAscending,
+                        showHiddenFiles: tabState.showHiddenFiles,
+                        backHistory: tabState.backHistory.map(sanitized),
+                        forwardHistory: tabState.forwardHistory.map(sanitized)
+                    )
+                }
+                guard !tabs.isEmpty else { return nil }
+                let pane = BrowserPane(tabs: tabs, selectedTabIndex: paneState.selectedTabIndex)
                 allPanes.append(pane)
                 return pane
             }

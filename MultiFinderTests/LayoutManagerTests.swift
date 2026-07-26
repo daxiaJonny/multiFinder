@@ -35,12 +35,25 @@ final class LayoutManagerTests: XCTestCase {
             rows: [
                 RowState(panes: [
                     PaneState(
-                        location: .search(SearchQuery(text: "swift", scope: URL(fileURLWithPath: "/tmp"))),
-                        sortField: .kind,
-                        sortAscending: false,
-                        showHiddenFiles: true,
-                        backHistory: [.recents],
-                        forwardHistory: [.directory(URL(fileURLWithPath: "/"))]
+                        tabs: [
+                            TabState(
+                                location: .search(SearchQuery(text: "swift", scope: URL(fileURLWithPath: "/tmp"))),
+                                sortField: .kind,
+                                sortAscending: false,
+                                showHiddenFiles: true,
+                                backHistory: [.recents],
+                                forwardHistory: [.directory(URL(fileURLWithPath: "/"))]
+                            ),
+                            TabState(
+                                location: .recents,
+                                sortField: .date,
+                                sortAscending: true,
+                                showHiddenFiles: false,
+                                backHistory: [],
+                                forwardHistory: []
+                            )
+                        ],
+                        selectedTabIndex: 1
                     )
                 ])
             ],
@@ -171,7 +184,7 @@ final class LayoutManagerTests: XCTestCase {
         XCTAssertEqual(manager.rows[0].paneWeights, [0.3, 0.7])
         XCTAssertEqual(manager.rows.map(\.heightWeight), [0.6, 0.4])
         XCTAssertEqual(manager.sidebarWidth, 245)
-        XCTAssertEqual(manager.rows[0].panes.compactMap(\.currentURL), [root, home])
+        XCTAssertEqual(manager.rows[0].panes.compactMap { $0.selectedTab.currentURL }, [root, home])
         XCTAssertEqual(manager.focusedPane?.currentURL, applications)
     }
 
@@ -182,7 +195,7 @@ final class LayoutManagerTests: XCTestCase {
 
         let template = manager.makeTemplateState()
 
-        XCTAssertTrue(template.rows.flatMap(\.panes).allSatisfy {
+        XCTAssertTrue(template.rows.flatMap(\.panes).flatMap(\.tabs).allSatisfy {
             $0.backHistory.isEmpty && $0.forwardHistory.isEmpty
         })
     }
@@ -192,7 +205,7 @@ final class LayoutManagerTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let manager = LayoutManager()
         let matchingPane = manager.rows[0].panes[0]
-        matchingPane.navigate(to: directory)
+        matchingPane.selectedTab.navigate(to: directory)
         manager.focusedPaneID = manager.rows[0].panes[1].id
 
         XCTAssertTrue(manager.openExternalPath(directory))
@@ -209,13 +222,13 @@ final class LayoutManagerTests: XCTestCase {
         try FileManager.default.createDirectory(at: child, withIntermediateDirectories: false)
         let manager = LayoutManager()
         let parentPane = manager.rows[0].panes[0]
-        parentPane.navigate(to: parent)
+        parentPane.selectedTab.navigate(to: parent)
 
         XCTAssertTrue(manager.openExternalPath(child))
 
         XCTAssertEqual(manager.totalPaneCount, 2)
         XCTAssertEqual(manager.focusedPaneID, parentPane.id)
-        XCTAssertEqual(parentPane.currentURL, child.standardizedFileURL)
+        XCTAssertEqual(parentPane.selectedTab.currentURL, child.standardizedFileURL)
         XCTAssertEqual(manager.highlightedPaneID, parentPane.id)
     }
 
@@ -242,15 +255,144 @@ final class LayoutManagerTests: XCTestCase {
         XCTAssertNotNil(manager.focusedPane?.errorMessage)
     }
 
+    func testNewTabDuplicatesCurrentLocationAndSelectsIt() throws {
+        let manager = LayoutManager()
+        let pane = try XCTUnwrap(manager.focusedBrowserPane)
+        pane.selectedTab.navigate(to: URL(fileURLWithPath: "/Applications"))
+
+        manager.newTab(in: pane.id)
+
+        XCTAssertEqual(pane.tabs.count, 2)
+        XCTAssertEqual(pane.selectedTabIndex, 1)
+        XCTAssertEqual(pane.selectedTab.currentURL, URL(fileURLWithPath: "/Applications").standardizedFileURL)
+        XCTAssertTrue(pane.selectedTab.backHistory.isEmpty)
+        XCTAssertEqual(manager.focusedPane?.id, pane.selectedTab.id)
+    }
+
+    func testCloseTabAdjustsSelectionAndClosingLastTabRemovesPane() throws {
+        let manager = LayoutManager()
+        let pane = try XCTUnwrap(manager.focusedBrowserPane)
+        manager.newTab(in: pane.id)
+        manager.newTab(in: pane.id)
+        XCTAssertEqual(pane.tabs.count, 3)
+        XCTAssertEqual(pane.selectedTabIndex, 2)
+
+        manager.closeTab(in: pane.id)
+        XCTAssertEqual(pane.tabs.count, 2)
+        XCTAssertEqual(pane.selectedTabIndex, 1)
+
+        manager.closeTab(at: 0, in: pane.id)
+        XCTAssertEqual(pane.tabs.count, 1)
+        XCTAssertEqual(pane.selectedTabIndex, 0)
+
+        manager.closeTab(in: pane.id)
+        XCTAssertEqual(manager.totalPaneCount, 1)
+        XCTAssertNil(manager.findPane(id: pane.id))
+        XCTAssertNotNil(manager.focusedPane)
+    }
+
+    func testClosingOnlyTabOfOnlyPaneKeepsPane() throws {
+        let manager = LayoutManager()
+        let firstPaneID = try XCTUnwrap(manager.focusedPaneID)
+        manager.removePane(manager.rows[0].panes[1].id)
+        XCTAssertEqual(manager.totalPaneCount, 1)
+
+        manager.closeTab(in: firstPaneID)
+
+        XCTAssertEqual(manager.totalPaneCount, 1)
+        XCTAssertEqual(manager.findPane(id: firstPaneID)?.tabs.count, 1)
+        XCTAssertFalse(manager.canCloseTab)
+    }
+
+    func testSelectNextAndPreviousTabWrapAround() throws {
+        let manager = LayoutManager()
+        let pane = try XCTUnwrap(manager.focusedBrowserPane)
+        manager.newTab(in: pane.id)
+        manager.newTab(in: pane.id)
+        XCTAssertEqual(pane.selectedTabIndex, 2)
+
+        manager.selectNextTab(in: pane.id)
+        XCTAssertEqual(pane.selectedTabIndex, 0)
+
+        manager.selectPreviousTab(in: pane.id)
+        XCTAssertEqual(pane.selectedTabIndex, 2)
+
+        manager.selectTab(at: 1, in: pane.id)
+        XCTAssertEqual(pane.selectedTabIndex, 1)
+        XCTAssertEqual(manager.focusedPane?.id, pane.tabs[1].id)
+    }
+
+    func testWorkspaceRoundTripPreservesTabsAndSelection() throws {
+        let manager = LayoutManager()
+        let pane = try XCTUnwrap(manager.focusedBrowserPane)
+        pane.selectedTab.navigate(to: URL(fileURLWithPath: "/Applications"))
+        manager.newTab(in: pane.id)
+        pane.selectedTab.loadRecents()
+        manager.selectTab(at: 0, in: pane.id)
+        manager.save()
+
+        let restored = LayoutManager(serializedState: manager.serializedState)
+        let restoredPane = try XCTUnwrap(restored.focusedBrowserPane)
+
+        XCTAssertEqual(restoredPane.tabs.count, 2)
+        XCTAssertEqual(restoredPane.selectedTabIndex, 0)
+        XCTAssertEqual(restoredPane.tabs[0].currentURL, URL(fileURLWithPath: "/Applications").standardizedFileURL)
+        XCTAssertEqual(restoredPane.tabs[1].location, .recents)
+    }
+
+    func testVersionThreeLayoutMigratesPanesToSingleTab() throws {
+        let legacyJSON = """
+        {
+          "version": 3,
+          "rows": [{
+            "panes": [{
+              "location": {"directory": {"_0": "file:///"}},
+              "sortField": "Name",
+              "sortAscending": true,
+              "showHiddenFiles": false,
+              "backHistory": [],
+              "forwardHistory": []
+            }, {
+              "location": {"directory": {"_0": "file:///Applications/"}},
+              "sortField": "Date Modified",
+              "sortAscending": false,
+              "showHiddenFiles": true,
+              "backHistory": [{"recents": {}}],
+              "forwardHistory": []
+            }],
+            "paneWeights": [0.4, 0.6],
+            "heightWeight": 1
+          }],
+          "focusedIndex": 1,
+          "sidebarWidth": 200
+        }
+        """
+        let encoded = Data(legacyJSON.utf8).base64EncodedString()
+
+        let decoded = try XCTUnwrap(LayoutManager.decode(encoded))
+        let restored = LayoutManager(serializedState: encoded)
+
+        XCTAssertEqual(decoded.rows[0].panes.map(\.tabs.count), [1, 1])
+        XCTAssertEqual(decoded.rows[0].panes.map(\.selectedTabIndex), [0, 0])
+        XCTAssertEqual(decoded.rows[0].panes[1].tabs[0].backHistory, [.recents])
+        XCTAssertEqual(restored.rows[0].panes.map(\.tabs.count), [1, 1])
+        XCTAssertEqual(restored.focusedPane?.currentURL, URL(fileURLWithPath: "/Applications").standardizedFileURL)
+        XCTAssertEqual(restored.focusedPane?.sortField, .date)
+        XCTAssertFalse(restored.focusedPane?.sortAscending ?? true)
+        XCTAssertTrue(restored.focusedPane?.showHiddenFiles ?? false)
+    }
+
     private func paneState(url: URL) -> PaneState {
-        PaneState(
-            location: .directory(url),
-            sortField: .name,
-            sortAscending: true,
-            showHiddenFiles: false,
-            backHistory: [],
-            forwardHistory: []
-        )
+        PaneState(tabs: [
+            TabState(
+                location: .directory(url),
+                sortField: .name,
+                sortAscending: true,
+                showHiddenFiles: false,
+                backHistory: [],
+                forwardHistory: []
+            )
+        ])
     }
 
     private func makeTemporaryDirectory() throws -> URL {

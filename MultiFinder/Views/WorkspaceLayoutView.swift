@@ -66,7 +66,7 @@ struct WorkspaceLayoutView: View {
         return HStack(spacing: 0) {
             ForEach(Array(row.panes.enumerated()), id: \.element.id) { paneIndex, pane in
                 FileBrowserPane(
-                    viewModel: pane,
+                    pane: pane,
                     layoutManager: layoutManager,
                     isFocused: layoutManager.focusedPaneID == pane.id,
                     isHighlighted: layoutManager.highlightedPaneID == pane.id,
