@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @main
@@ -22,11 +23,32 @@ struct MultiFinderApp: App {
                 }
                 .keyboardShortcut("n", modifiers: .command)
 
+                Button("New Tab") {
+                    guard let id = layoutManager?.focusedPaneID else { return }
+                    layoutManager?.newTab(in: id)
+                }
+                .keyboardShortcut("t", modifiers: .command)
+                .disabled(layoutManager == nil)
+
                 Button("New Folder") {
                     layoutManager?.focusedPane?.newFolder()
                 }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
                 .disabled(layoutManager?.focusedPane?.canCreateItems != true)
+            }
+
+            CommandGroup(replacing: .saveItem) {
+                Button("Close Tab") {
+                    guard let id = layoutManager?.focusedPaneID else { return }
+                    layoutManager?.closeTab(in: id)
+                }
+                .keyboardShortcut("w", modifiers: .command)
+                .disabled(layoutManager?.canCloseTab != true)
+
+                Button("Close Window") {
+                    NSApp.keyWindow?.performClose(nil)
+                }
+                .keyboardShortcut("w", modifiers: [.command, .shift])
             }
 
             CommandGroup(replacing: .undoRedo) {
@@ -119,6 +141,19 @@ struct MultiFinderApp: App {
                     layoutManager?.removePane(id)
                 }
                 .disabled((layoutManager?.totalPaneCount ?? 1) <= 1)
+                Divider()
+                Button("Next Tab") {
+                    guard let id = layoutManager?.focusedPaneID else { return }
+                    layoutManager?.selectNextTab(in: id)
+                }
+                .keyboardShortcut(.tab, modifiers: .control)
+                .disabled((layoutManager?.focusedBrowserPane?.tabs.count ?? 0) < 2)
+                Button("Previous Tab") {
+                    guard let id = layoutManager?.focusedPaneID else { return }
+                    layoutManager?.selectPreviousTab(in: id)
+                }
+                .keyboardShortcut(.tab, modifiers: [.control, .shift])
+                .disabled((layoutManager?.focusedBrowserPane?.tabs.count ?? 0) < 2)
                 Divider()
                 Button("Focus Pane Left") { layoutManager?.focusPane(direction: .left) }
                     .keyboardShortcut(.leftArrow, modifiers: [.command, .option])

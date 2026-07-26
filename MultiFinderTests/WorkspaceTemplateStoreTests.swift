@@ -49,16 +49,52 @@ final class WorkspaceTemplateStoreTests: XCTestCase {
         XCTAssertNotNil(recoveredStore.save(name: "Recovered", layoutState: makeLayout(paneCount: 1)))
     }
 
+    func testLegacyVersionThreeTemplateStillLoads() throws {
+        let (userDefaults, suiteName) = try makeUserDefaults()
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+        let legacyJSON = """
+        [{
+          "id": "\(UUID().uuidString)",
+          "name": "Legacy",
+          "savedAt": 700000000,
+          "layoutState": {
+            "version": 3,
+            "rows": [{
+              "panes": [{
+                "location": {"recents": {}},
+                "sortField": "Name",
+                "sortAscending": true,
+                "showHiddenFiles": false,
+                "backHistory": [],
+                "forwardHistory": []
+              }]
+            }],
+            "focusedIndex": 0
+          }
+        }]
+        """
+        userDefaults.set(Data(legacyJSON.utf8), forKey: Self.storageKey)
+
+        let store = makeStore(userDefaults: userDefaults)
+
+        XCTAssertEqual(store.templates.count, 1)
+        XCTAssertEqual(store.templates.first?.paneCount, 1)
+        XCTAssertEqual(store.templates.first?.layoutState.rows.first?.panes.first?.tabs.count, 1)
+        XCTAssertEqual(store.templates.first?.layoutState.rows.first?.panes.first?.tabs.first?.location, .recents)
+    }
+
     private func makeLayout(paneCount: Int) -> LayoutState {
         let panes = (0..<paneCount).map { index in
-            PaneState(
-                location: .directory(URL(fileURLWithPath: index.isMultiple(of: 2) ? "/" : "/Applications")),
-                sortField: .name,
-                sortAscending: true,
-                showHiddenFiles: false,
-                backHistory: [],
-                forwardHistory: []
-            )
+            PaneState(tabs: [
+                TabState(
+                    location: .directory(URL(fileURLWithPath: index.isMultiple(of: 2) ? "/" : "/Applications")),
+                    sortField: .name,
+                    sortAscending: true,
+                    showHiddenFiles: false,
+                    backHistory: [],
+                    forwardHistory: []
+                )
+            ])
         }
         return LayoutState(
             version: LayoutState.currentVersion,

@@ -261,7 +261,19 @@ private struct BrowserToolbar: ToolbarContent {
 
             Menu {
                 Button {
-                    layoutManager.addPaneRight(of: pane.id)
+                    guard let id = layoutManager.focusedPaneID else { return }
+                    layoutManager.newTab(in: id)
+                } label: {
+                    Image(systemName: "plus.rectangle.on.rectangle")
+                        .accessibilityLabel("New Tab")
+                }
+                .help("New Tab")
+
+                Divider()
+
+                Button {
+                    guard let id = layoutManager.focusedPaneID else { return }
+                    layoutManager.addPaneRight(of: id)
                 } label: {
                     Image(systemName: "rectangle.righthalf.inset.filled")
                         .accessibilityLabel("Split Right")
@@ -269,7 +281,8 @@ private struct BrowserToolbar: ToolbarContent {
                 .help("Split Right")
 
                 Button {
-                    layoutManager.addPaneLeft(of: pane.id)
+                    guard let id = layoutManager.focusedPaneID else { return }
+                    layoutManager.addPaneLeft(of: id)
                 } label: {
                     Image(systemName: "rectangle.lefthalf.inset.filled")
                         .accessibilityLabel("Split Left")
@@ -279,7 +292,8 @@ private struct BrowserToolbar: ToolbarContent {
                 Divider()
 
                 Button {
-                    layoutManager.addRowBelow(of: pane.id)
+                    guard let id = layoutManager.focusedPaneID else { return }
+                    layoutManager.addRowBelow(of: id)
                 } label: {
                     Image(systemName: "rectangle.bottomhalf.inset.filled")
                         .accessibilityLabel("Add Row Below")
@@ -287,7 +301,8 @@ private struct BrowserToolbar: ToolbarContent {
                 .help("Add Row Below")
 
                 Button {
-                    layoutManager.addRowAbove(of: pane.id)
+                    guard let id = layoutManager.focusedPaneID else { return }
+                    layoutManager.addRowAbove(of: id)
                 } label: {
                     Image(systemName: "rectangle.tophalf.inset.filled")
                         .accessibilityLabel("Add Row Above")
@@ -297,7 +312,8 @@ private struct BrowserToolbar: ToolbarContent {
                 Divider()
 
                 Button(role: .destructive) {
-                    layoutManager.removePane(pane.id)
+                    guard let id = layoutManager.focusedPaneID else { return }
+                    layoutManager.removePane(id)
                 } label: {
                     Image(systemName: "rectangle.badge.minus")
                         .accessibilityLabel("Remove Pane")
