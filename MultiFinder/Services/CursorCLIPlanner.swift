@@ -243,7 +243,7 @@ final class CursorCLIPlanner: AIPlanner {
     ) throws -> String {
         let process = Process()
         process.executableURL = executableURL
-        process.arguments = ["-p", "--mode", "plan", "--output-format", "json", prompt]
+        process.arguments = ["-p", "--mode", "plan", "--trust", "--output-format", "json", prompt]
         process.currentDirectoryURL = currentDirectory
         process.standardInput = FileHandle.nullDevice
 

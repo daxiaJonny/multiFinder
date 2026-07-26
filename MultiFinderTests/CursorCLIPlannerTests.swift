@@ -70,7 +70,7 @@ final class CursorCLIPlannerTests: XCTestCase {
 
         let lines = try String(contentsOf: capture, encoding: .utf8)
             .split(separator: "\n").map(String.init)
-        XCTAssertEqual(Array(lines.prefix(5)), ["-p", "--mode", "plan", "--output-format", "json"])
+        XCTAssertEqual(Array(lines.prefix(6)), ["-p", "--mode", "plan", "--trust", "--output-format", "json"])
         XCTAssertTrue(lines.dropFirst(5).joined(separator: "\n").contains("User request:"))
     }
 
