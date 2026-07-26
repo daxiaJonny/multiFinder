@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0AE475C8332F130DE61B716E /* AIOrganizeServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3AF2FC84D955F98D45D27B1 /* AIOrganizeServiceTests.swift */; };
 		0BFDC283FC6679F917FB85C5 /* FileOperationServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51B056B24F605E5B72AAF040 /* FileOperationServiceTests.swift */; };
 		0E17B4571498C37AE157007C /* PlanValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E3338B9DC51C7DDC7B93181 /* PlanValidatorTests.swift */; };
 		11070D15585968AC8ED7E2D9 /* ArchiveOperationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BA5ED883DF029A95F662B80 /* ArchiveOperationTests.swift */; };
@@ -106,11 +107,12 @@
 		DE773915D5DE13A82CCFED77 /* FavoritesStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritesStoreTests.swift; sourceTree = "<group>"; };
 		E107ACB45970C4B93AC1B778 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		E40C2D2BDBEC67F652E98B55 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		F3AF2FC84D955F98D45D27B1 /* AIOrganizeServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIOrganizeServiceTests.swift; sourceTree = "<group>"; };
 		F3DB8A9C48FD94E7A4741BE5 /* FileItemTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileItemTests.swift; sourceTree = "<group>"; };
 		F3EE0F6EB779A0C48C755723 /* FileItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileItem.swift; sourceTree = "<group>"; };
 		F50ED281A635BA3741111738 /* AIPlanValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIPlanValidator.swift; sourceTree = "<group>"; };
 		F6B70D849D3B3CDEC367A4D9 /* QuickLookManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickLookManager.swift; sourceTree = "<group>"; };
-		"TEMP_561718B4-763D-4A08-AAA6-B10CBA4400B4" /* Signing.release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.release.xcconfig; sourceTree = "<group>"; };
+		"TEMP_4F32001B-EDB7-43B8-942C-627EA4B654C9" /* Signing.release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.release.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -179,6 +181,7 @@
 		BC709CAF3B0CFA5C5AE781A1 /* MultiFinderTests */ = {
 			isa = PBXGroup;
 			children = (
+				F3AF2FC84D955F98D45D27B1 /* AIOrganizeServiceTests.swift */,
 				36B613C18B03E38A73C4D6E3 /* AIPlanParsingTests.swift */,
 				1BA5ED883DF029A95F662B80 /* ArchiveOperationTests.swift */,
 				8C93439FBAC9178C115818C3 /* BatchRenameEngineTests.swift */,
@@ -228,12 +231,12 @@
 			path = Services;
 			sourceTree = "<group>";
 		};
-		"TEMP_1D118ED7-CBAE-4FAD-A5F0-4CD44A8A1CEB" /* agent-a80bc2d87cbfefb9c */ = {
+		"TEMP_A33F2290-891F-4C4C-A004-424C07A3C748" /* agent-a0ff68b2f04c93a31 */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_561718B4-763D-4A08-AAA6-B10CBA4400B4" /* Signing.release.xcconfig */,
+				"TEMP_4F32001B-EDB7-43B8-942C-627EA4B654C9" /* Signing.release.xcconfig */,
 			);
-			path = "agent-a80bc2d87cbfefb9c";
+			path = "agent-a0ff68b2f04c93a31";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -371,6 +374,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0AE475C8332F130DE61B716E /* AIOrganizeServiceTests.swift in Sources */,
 				527A8393819338603844F00C /* AIPlanParsingTests.swift in Sources */,
 				11070D15585968AC8ED7E2D9 /* ArchiveOperationTests.swift in Sources */,
 				139726AB40EEC6CC592A0A45 /* BatchRenameEngineTests.swift in Sources */,
@@ -485,7 +489,7 @@
 		};
 		666771FE6C9501D62E3BDAD2 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_561718B4-763D-4A08-AAA6-B10CBA4400B4" /* Signing.release.xcconfig */;
+			baseConfigurationReference = "TEMP_4F32001B-EDB7-43B8-942C-627EA4B654C9" /* Signing.release.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;

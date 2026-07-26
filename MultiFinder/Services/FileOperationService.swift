@@ -25,6 +25,7 @@ enum FileOperationKind: String, Sendable {
     case batchRename = "Batch Rename"
     case compress = "Compress"
     case extract = "Extract"
+    case aiOrganize = "AI Organize"
 }
 
 struct BatchRenamePair: Hashable, Sendable {
@@ -127,6 +128,7 @@ fileprivate enum FileOperationRequest: Sendable {
     case batchRename(pairs: [BatchRenamePair])
     case compress(sources: [URL])
     case extract(archives: [URL])
+    case aiOrganize(operations: [AIPlanOperation], scopeRoot: URL)
 
     var kind: FileOperationKind {
         switch self {
@@ -138,6 +140,7 @@ fileprivate enum FileOperationRequest: Sendable {
         case .batchRename: return .batchRename
         case .compress: return .compress
         case .extract: return .extract
+        case .aiOrganize: return .aiOrganize
         }
     }
 
@@ -149,6 +152,7 @@ fileprivate enum FileOperationRequest: Sendable {
         case .batchRename(let pairs): return pairs.count
         case .compress(let sources): return sources.isEmpty ? 0 : 1
         case .extract(let archives): return archives.count
+        case .aiOrganize(let operations, _): return operations.count
         }
     }
 
@@ -178,6 +182,13 @@ fileprivate enum FileOperationRequest: Sendable {
         case .extract(let archives):
             let failed = archives.filter { failedSources.contains($0.standardizedFileURL) }
             return failed.isEmpty ? nil : .extract(archives: failed)
+        case .aiOrganize(let operations, let scopeRoot):
+            let failed = operations.filter { operation in
+                failedSources.contains(
+                    FileOperationService.aiOperationSource(operation, scopeRoot: scopeRoot).standardizedFileURL
+                )
+            }
+            return failed.isEmpty ? nil : .aiOrganize(operations: failed, scopeRoot: scopeRoot)
         }
     }
 }
@@ -384,6 +395,14 @@ final class FileOperationService: ObservableObject {
         enqueue(.extract(archives: archives), completion: completion)
     }
 
+    func aiOrganizeDetailed(
+        _ operations: [AIPlanOperation],
+        scopeRoot: URL,
+        completion: ((FileOperationResult) -> Void)? = nil
+    ) {
+        enqueue(.aiOrganize(operations: operations, scopeRoot: scopeRoot), completion: completion)
+    }
+
     func cancelCurrent() {
         activeTask?.cancel()
         if conflictContinuation != nil {
@@ -585,6 +604,8 @@ final class FileOperationService: ObservableObject {
             return await executeCompress(sources)
         case .extract(let archives):
             return await executeExtract(archives)
+        case .aiOrganize(let operations, let scopeRoot):
+            return await executeAIOrganize(operations, scopeRoot: scopeRoot)
         }
     }
 
@@ -931,6 +952,116 @@ final class FileOperationService: ObservableObject {
         return Self.executionResult(changes: changes, outcomes: outcomes, wasCancelled: wasCancelled)
     }
 
+    private func executeAIOrganize(_ operations: [AIPlanOperation], scopeRoot: URL) async -> ExecutionResult {
+        var changes: [FileOperationChange] = []
+        var outcomes: [FileItemOperationOutcome] = []
+        var wasCancelled = false
+
+        for (index, operation) in operations.enumerated() {
+            let source = Self.aiOperationSource(operation, scopeRoot: scopeRoot)
+            do {
+                try Task.checkCancellation()
+                let change = try await Self.performAIOperation(operation, scopeRoot: scopeRoot)
+                changes.append(change)
+                outcomes.append(FileItemOperationOutcome(
+                    source: source,
+                    destination: change.currentURL,
+                    status: .completed,
+                    errorMessage: nil
+                ))
+                updateProgress(index + 1)
+            } catch is CancellationError {
+                outcomes.append(FileItemOperationOutcome(
+                    source: source,
+                    destination: nil,
+                    status: .cancelled,
+                    errorMessage: "The operation was cancelled."
+                ))
+                outcomes.append(contentsOf: operations.dropFirst(index + 1).map { remainingOperation in
+                    FileItemOperationOutcome(
+                        source: Self.aiOperationSource(remainingOperation, scopeRoot: scopeRoot),
+                        destination: nil,
+                        status: .cancelled,
+                        errorMessage: "The operation was cancelled before this item started."
+                    )
+                })
+                wasCancelled = true
+                break
+            } catch {
+                outcomes.append(FileItemOperationOutcome(
+                    source: source,
+                    destination: nil,
+                    status: .failed,
+                    errorMessage: error.localizedDescription
+                ))
+                updateProgress(index + 1)
+            }
+        }
+
+        return Self.executionResult(changes: changes, outcomes: outcomes, wasCancelled: wasCancelled)
+    }
+
+    fileprivate nonisolated static func aiOperationSource(
+        _ operation: AIPlanOperation,
+        scopeRoot: URL
+    ) -> URL {
+        switch operation {
+        case .createFolder(let path):
+            return scopeRoot.appendingPathComponent(path).standardizedFileURL
+        case .move(let source, _), .copy(let source, _), .rename(let source, _), .trash(let source):
+            return scopeRoot.appendingPathComponent(source).standardizedFileURL
+        }
+    }
+
+    private nonisolated static func performAIOperation(
+        _ operation: AIPlanOperation,
+        scopeRoot: URL
+    ) async throws -> FileOperationChange {
+        try await runWorker {
+            let fileManager = FileManager.default
+            let resolve: (String) -> URL = { scopeRoot.appendingPathComponent($0).standardizedFileURL }
+            try Task.checkCancellation()
+
+            switch operation {
+            case .createFolder(let path):
+                let destination = resolve(path)
+                try fileManager.createDirectory(at: destination, withIntermediateDirectories: false)
+                return .created(destination, identity: try fileIdentity(at: destination))
+            case .move(let source, let destination):
+                let sourceURL = resolve(source)
+                let destinationURL = resolve(destination)
+                guard !fileManager.fileExists(atPath: destinationURL.path) else {
+                    throw FileOperationError(
+                        message: "An item named “\(destinationURL.lastPathComponent)” already exists."
+                    )
+                }
+                try fileManager.moveItem(at: sourceURL, to: destinationURL)
+                return .moved(from: sourceURL, to: destinationURL, identity: try fileIdentity(at: destinationURL))
+            case .copy(let source, let destination):
+                let sourceURL = resolve(source)
+                let destinationURL = resolve(destination)
+                guard !fileManager.fileExists(atPath: destinationURL.path) else {
+                    throw FileOperationError(
+                        message: "An item named “\(destinationURL.lastPathComponent)” already exists."
+                    )
+                }
+                try copyItemCancellable(from: sourceURL, to: destinationURL, fileManager: fileManager)
+                return .created(destinationURL, identity: try fileIdentity(at: destinationURL))
+            case .rename(let source, let newName):
+                let sourceURL = resolve(source)
+                let destinationURL = sourceURL.deletingLastPathComponent().appendingPathComponent(newName)
+                if sourceURL.path.caseInsensitiveCompare(destinationURL.path) != .orderedSame,
+                   fileManager.fileExists(atPath: destinationURL.path) {
+                    throw FileOperationError(message: "An item named “\(newName)” already exists.")
+                }
+                try fileManager.moveItem(at: sourceURL, to: destinationURL)
+                return .moved(from: sourceURL, to: destinationURL, identity: try fileIdentity(at: destinationURL))
+            case .trash(let source):
+                return try trashSynchronously(resolve(source), fileManager: fileManager)
+            }
+        }
+    }
+
     private nonisolated static func executionResult(
         changes: [FileOperationChange],
         outcomes: [FileItemOperationOutcome],
@@ -1064,7 +1195,7 @@ final class FileOperationService: ObservableObject {
                     volumeIdentifierProvider: volumeIdentifierProvider,
                     fileManager: fileManager
                 )
-            case .trash, .createFolder, .batchRename, .compress, .extract:
+            case .trash, .createFolder, .batchRename, .compress, .extract, .aiOrganize:
                 preconditionFailure("Unsupported transfer kind")
             }
         }
