@@ -248,6 +248,11 @@ private struct PaneTabContent: View {
         .sheet(item: $renameTarget) { item in
             RenameSheet(item: item, viewModel: viewModel)
         }
+        .sheet(isPresented: batchRenamePresented) {
+            if let batchItems = viewModel.batchRenameItems {
+                BatchRenameSheet(items: batchItems, viewModel: viewModel)
+            }
+        }
         .alert("Error", isPresented: showErrorBinding) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -292,6 +297,15 @@ private struct PaneTabContent: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
         .background(Color(nsColor: .underPageBackgroundColor))
+    }
+
+    // MARK: - Helpers
+
+    private var batchRenamePresented: Binding<Bool> {
+        Binding(
+            get: { viewModel.batchRenameItems != nil },
+            set: { if !$0 { viewModel.batchRenameItems = nil } }
+        )
     }
 
     private var showErrorBinding: Binding<Bool> {

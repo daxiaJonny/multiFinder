@@ -22,6 +22,14 @@ enum FileOperationKind: String, Sendable {
     case trash = "Move to Trash"
     case rename = "Rename"
     case createFolder = "New Folder"
+    case batchRename = "Batch Rename"
+    case compress = "Compress"
+    case extract = "Extract"
+}
+
+struct BatchRenamePair: Hashable, Sendable {
+    let source: URL
+    let destination: URL
 }
 
 enum FileOperationStatus: String, Sendable {
@@ -116,6 +124,9 @@ fileprivate enum FileOperationRequest: Sendable {
     case trash(urls: [URL])
     case rename(source: URL, destination: URL, policy: FileConflictPolicy)
     case createFolder(parent: URL, baseName: String)
+    case batchRename(pairs: [BatchRenamePair])
+    case compress(sources: [URL])
+    case extract(archives: [URL])
 
     var kind: FileOperationKind {
         switch self {
@@ -124,6 +135,9 @@ fileprivate enum FileOperationRequest: Sendable {
         case .trash: return .trash
         case .rename: return .rename
         case .createFolder: return .createFolder
+        case .batchRename: return .batchRename
+        case .compress: return .compress
+        case .extract: return .extract
         }
     }
 
@@ -132,6 +146,9 @@ fileprivate enum FileOperationRequest: Sendable {
         case .copy(let sources, _, _), .move(let sources, _, _): return sources.count
         case .trash(let urls): return urls.count
         case .rename, .createFolder: return 1
+        case .batchRename(let pairs): return pairs.count
+        case .compress(let sources): return sources.isEmpty ? 0 : 1
+        case .extract(let archives): return archives.count
         }
     }
 
@@ -153,8 +170,14 @@ fileprivate enum FileOperationRequest: Sendable {
         case .trash(let urls):
             let failed = urls.filter { failedSources.contains($0.standardizedFileURL) }
             return failed.isEmpty ? nil : .trash(urls: failed)
-        case .rename, .createFolder:
+        case .rename, .createFolder, .compress:
             return self
+        case .batchRename(let pairs):
+            let failed = pairs.filter { failedSources.contains($0.source.standardizedFileURL) }
+            return failed.isEmpty ? nil : .batchRename(pairs: failed)
+        case .extract(let archives):
+            let failed = archives.filter { failedSources.contains($0.standardizedFileURL) }
+            return failed.isEmpty ? nil : .extract(archives: failed)
         }
     }
 }
@@ -340,6 +363,27 @@ final class FileOperationService: ObservableObject {
         enqueue(.createFolder(parent: parent, baseName: baseName), completion: completion)
     }
 
+    func batchRenameDetailed(
+        _ pairs: [BatchRenamePair],
+        completion: ((FileOperationResult) -> Void)? = nil
+    ) {
+        enqueue(.batchRename(pairs: pairs), completion: completion)
+    }
+
+    func compressDetailed(
+        _ sources: [URL],
+        completion: ((FileOperationResult) -> Void)? = nil
+    ) {
+        enqueue(.compress(sources: sources), completion: completion)
+    }
+
+    func extractDetailed(
+        _ archives: [URL],
+        completion: ((FileOperationResult) -> Void)? = nil
+    ) {
+        enqueue(.extract(archives: archives), completion: completion)
+    }
+
     func cancelCurrent() {
         activeTask?.cancel()
         if conflictContinuation != nil {
@@ -394,7 +438,7 @@ final class FileOperationService: ObservableObject {
         enqueue(record.request, origin: .redo(record))
     }
 
-    static func validationError(forFileName name: String) -> String? {
+    nonisolated static func validationError(forFileName name: String) -> String? {
         if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "A file name cannot be empty."
         }
@@ -405,6 +449,23 @@ final class FileOperationService: ObservableObject {
             return "File names cannot contain “/” or a null character."
         }
         return nil
+    }
+
+    nonisolated static func isExtractableArchive(_ url: URL) -> Bool {
+        let name = url.lastPathComponent.lowercased()
+        return [".zip", ".tar", ".tgz", ".gz"].contains { suffix in
+            name.hasSuffix(suffix) && name.count > suffix.count
+        }
+    }
+
+    nonisolated static func extractionBaseName(for url: URL) -> String {
+        let name = url.lastPathComponent
+        let lowercased = name.lowercased()
+        for suffix in [".tar.gz", ".tgz", ".tar", ".zip", ".gz"]
+        where lowercased.hasSuffix(suffix) && name.count > suffix.count {
+            return String(name.dropLast(suffix.count))
+        }
+        return name
     }
 
     nonisolated static func uniqueDestination(for source: URL, in directory: URL, fileManager: FileManager = .default) -> URL {
@@ -518,6 +579,12 @@ final class FileOperationService: ObservableObject {
             return await executeRename(source, to: destination, policy: policy)
         case .createFolder(let parent, let baseName):
             return await executeCreateFolder(in: parent, baseName: baseName)
+        case .batchRename(let pairs):
+            return await executeBatchRename(pairs)
+        case .compress(let sources):
+            return await executeCompress(sources)
+        case .extract(let archives):
+            return await executeExtract(archives)
         }
     }
 
@@ -727,6 +794,143 @@ final class FileOperationService: ObservableObject {
         }
     }
 
+    private func executeBatchRename(_ pairs: [BatchRenamePair]) async -> ExecutionResult {
+        var changes: [FileOperationChange] = []
+        var outcomes: [FileItemOperationOutcome] = []
+        var wasCancelled = false
+
+        for (index, pair) in pairs.enumerated() {
+            do {
+                try Task.checkCancellation()
+                let change = try await Self.renameItem(pair.source, to: pair.destination)
+                changes.append(change)
+                outcomes.append(FileItemOperationOutcome(
+                    source: pair.source,
+                    destination: pair.destination,
+                    status: .completed,
+                    errorMessage: nil
+                ))
+                updateProgress(index + 1)
+            } catch is CancellationError {
+                outcomes.append(FileItemOperationOutcome(
+                    source: pair.source,
+                    destination: nil,
+                    status: .cancelled,
+                    errorMessage: "The operation was cancelled."
+                ))
+                outcomes.append(contentsOf: pairs.dropFirst(index + 1).map { remainingPair in
+                    FileItemOperationOutcome(
+                        source: remainingPair.source,
+                        destination: nil,
+                        status: .cancelled,
+                        errorMessage: "The operation was cancelled before this item started."
+                    )
+                })
+                wasCancelled = true
+                break
+            } catch {
+                outcomes.append(FileItemOperationOutcome(
+                    source: pair.source,
+                    destination: nil,
+                    status: .failed,
+                    errorMessage: error.localizedDescription
+                ))
+                updateProgress(index + 1)
+            }
+        }
+
+        return Self.executionResult(changes: changes, outcomes: outcomes, wasCancelled: wasCancelled)
+    }
+
+    private func executeCompress(_ sources: [URL]) async -> ExecutionResult {
+        guard let firstSource = sources.first else {
+            return Self.executionResult(changes: [], outcomes: [])
+        }
+        do {
+            try Task.checkCancellation()
+            let change = try await Self.compress(sources)
+            updateProgress(1)
+            return Self.executionResult(
+                changes: [change],
+                outcomes: [FileItemOperationOutcome(
+                    source: firstSource,
+                    destination: change.currentURL,
+                    status: .completed,
+                    errorMessage: nil
+                )]
+            )
+        } catch is CancellationError {
+            return Self.executionResult(
+                changes: [],
+                outcomes: [FileItemOperationOutcome(
+                    source: firstSource,
+                    destination: nil,
+                    status: .cancelled,
+                    errorMessage: "The operation was cancelled."
+                )],
+                wasCancelled: true
+            )
+        } catch {
+            return Self.executionResult(
+                changes: [],
+                outcomes: [FileItemOperationOutcome(
+                    source: firstSource,
+                    destination: nil,
+                    status: .failed,
+                    errorMessage: error.localizedDescription
+                )]
+            )
+        }
+    }
+
+    private func executeExtract(_ archives: [URL]) async -> ExecutionResult {
+        var changes: [FileOperationChange] = []
+        var outcomes: [FileItemOperationOutcome] = []
+        var wasCancelled = false
+
+        for (index, archive) in archives.enumerated() {
+            do {
+                try Task.checkCancellation()
+                let change = try await Self.extract(archive)
+                changes.append(change)
+                outcomes.append(FileItemOperationOutcome(
+                    source: archive,
+                    destination: change.currentURL,
+                    status: .completed,
+                    errorMessage: nil
+                ))
+                updateProgress(index + 1)
+            } catch is CancellationError {
+                outcomes.append(FileItemOperationOutcome(
+                    source: archive,
+                    destination: nil,
+                    status: .cancelled,
+                    errorMessage: "The operation was cancelled."
+                ))
+                outcomes.append(contentsOf: archives.dropFirst(index + 1).map { remainingArchive in
+                    FileItemOperationOutcome(
+                        source: remainingArchive,
+                        destination: nil,
+                        status: .cancelled,
+                        errorMessage: "The operation was cancelled before this item started."
+                    )
+                })
+                wasCancelled = true
+                break
+            } catch {
+                outcomes.append(FileItemOperationOutcome(
+                    source: archive,
+                    destination: nil,
+                    status: .failed,
+                    errorMessage: error.localizedDescription
+                ))
+                updateProgress(index + 1)
+            }
+        }
+
+        return Self.executionResult(changes: changes, outcomes: outcomes, wasCancelled: wasCancelled)
+    }
+
     private nonisolated static func executionResult(
         changes: [FileOperationChange],
         outcomes: [FileItemOperationOutcome],
@@ -860,7 +1064,7 @@ final class FileOperationService: ObservableObject {
                     volumeIdentifierProvider: volumeIdentifierProvider,
                     fileManager: fileManager
                 )
-            case .trash, .createFolder:
+            case .trash, .createFolder, .batchRename, .compress, .extract:
                 preconditionFailure("Unsupported transfer kind")
             }
         }
@@ -896,6 +1100,163 @@ final class FileOperationService: ObservableObject {
             try Task.checkCancellation()
             try fileManager.createDirectory(at: destination, withIntermediateDirectories: false)
             return .created(destination, identity: try fileIdentity(at: destination))
+        }
+    }
+
+    private nonisolated static func renameItem(_ source: URL, to destination: URL) async throws -> FileOperationChange {
+        try await runWorker {
+            let fileManager = FileManager.default
+            try Task.checkCancellation()
+            if source.path.caseInsensitiveCompare(destination.path) != .orderedSame,
+               fileManager.fileExists(atPath: destination.path) {
+                throw FileOperationError(
+                    message: "An item named “\(destination.lastPathComponent)” already exists."
+                )
+            }
+            try fileManager.moveItem(at: source, to: destination)
+            return .moved(from: source, to: destination, identity: try fileIdentity(at: destination))
+        }
+    }
+
+    private nonisolated static func compress(_ sources: [URL]) async throws -> FileOperationChange {
+        try await runWorker {
+            let fileManager = FileManager.default
+            guard let firstSource = sources.first else {
+                throw FileOperationError(message: "There is nothing to compress.")
+            }
+            let directory = firstSource.deletingLastPathComponent()
+            let staging = directory.appendingPathComponent(".multifinder-compress-\(UUID().uuidString).zip")
+            defer {
+                if fileManager.fileExists(atPath: staging.path) {
+                    try? fileManager.removeItem(at: staging)
+                }
+            }
+
+            if sources.count == 1 {
+                try runProcess(
+                    "/usr/bin/ditto",
+                    arguments: ["-ck", "--keepParent", "--sequesterRsrc", firstSource.path, staging.path]
+                )
+            } else {
+                guard sources.allSatisfy({ $0.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL }) else {
+                    throw FileOperationError(message: "Items can only be compressed together from the same folder.")
+                }
+                try runProcess(
+                    "/usr/bin/zip",
+                    arguments: ["-r", "-y", "-q", staging.path] + sources.map { $0.lastPathComponent },
+                    currentDirectory: directory
+                )
+            }
+
+            try Task.checkCancellation()
+            let baseName = sources.count == 1 ? firstSource.lastPathComponent : "Archive"
+            let destination = uniqueNumberedDestination(
+                in: directory,
+                baseName: baseName,
+                fileExtension: "zip",
+                fileManager: fileManager
+            )
+            try fileManager.moveItem(at: staging, to: destination)
+            return .created(destination, identity: try fileIdentity(at: destination))
+        }
+    }
+
+    private nonisolated static func extract(_ archive: URL) async throws -> FileOperationChange {
+        try await runWorker {
+            let fileManager = FileManager.default
+            let directory = archive.deletingLastPathComponent()
+            let name = archive.lastPathComponent
+            let lowercased = name.lowercased()
+            let staging = directory.appendingPathComponent(".multifinder-extract-\(UUID().uuidString)")
+            defer {
+                if fileManager.fileExists(atPath: staging.path) {
+                    try? fileManager.removeItem(at: staging)
+                }
+            }
+            try fileManager.createDirectory(at: staging, withIntermediateDirectories: false)
+
+            if lowercased.hasSuffix(".zip") {
+                try runProcess("/usr/bin/ditto", arguments: ["-xk", archive.path, staging.path])
+            } else if lowercased.hasSuffix(".tar") || lowercased.hasSuffix(".tar.gz") || lowercased.hasSuffix(".tgz") {
+                try runProcess("/usr/bin/tar", arguments: ["-xf", archive.path, "-C", staging.path])
+            } else if lowercased.hasSuffix(".gz") {
+                let outputName = String(name.dropLast(3))
+                let outputURL = staging.appendingPathComponent(outputName.isEmpty ? "extracted" : outputName)
+                guard fileManager.createFile(atPath: outputURL.path, contents: nil) else {
+                    throw FileOperationError(message: "Could not create \(outputURL.lastPathComponent).")
+                }
+                let output = try FileHandle(forWritingTo: outputURL)
+                defer { try? output.close() }
+                try runProcess("/usr/bin/gunzip", arguments: ["-c", archive.path], standardOutput: output)
+            } else {
+                throw FileOperationError(message: "“\(name)” is not a supported archive.")
+            }
+
+            try Task.checkCancellation()
+            let destination = uniqueNumberedDestination(
+                in: directory,
+                baseName: extractionBaseName(for: archive),
+                fileExtension: nil,
+                fileManager: fileManager
+            )
+            try fileManager.moveItem(at: staging, to: destination)
+            return .created(destination, identity: try fileIdentity(at: destination))
+        }
+    }
+
+    private nonisolated static func uniqueNumberedDestination(
+        in directory: URL,
+        baseName: String,
+        fileExtension: String?,
+        fileManager: FileManager
+    ) -> URL {
+        var counter = 1
+        while true {
+            let name = counter == 1 ? baseName : "\(baseName) \(counter)"
+            let fullName = fileExtension.map { "\(name).\($0)" } ?? name
+            let candidate = directory.appendingPathComponent(fullName)
+            if !fileManager.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+            counter += 1
+        }
+    }
+
+    private nonisolated static func runProcess(
+        _ launchPath: String,
+        arguments: [String],
+        currentDirectory: URL? = nil,
+        standardOutput: FileHandle? = nil
+    ) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: launchPath)
+        process.arguments = arguments
+        if let currentDirectory {
+            process.currentDirectoryURL = currentDirectory
+        }
+        let errorPipe = Pipe()
+        process.standardError = errorPipe
+        if let standardOutput {
+            process.standardOutput = standardOutput
+        }
+        try process.run()
+
+        while process.isRunning {
+            if Task.isCancelled {
+                process.terminate()
+                process.waitUntilExit()
+                throw CancellationError()
+            }
+            usleep(50_000)
+        }
+
+        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        guard process.terminationStatus == 0 else {
+            let toolMessage = String(data: errorData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let toolName = (launchPath as NSString).lastPathComponent
+            let detail = toolMessage.isEmpty ? "exit code \(process.terminationStatus)" : toolMessage
+            throw FileOperationError(message: "\(toolName) failed: \(detail)")
         }
     }
 

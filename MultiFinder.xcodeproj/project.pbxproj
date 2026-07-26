@@ -8,7 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		0BFDC283FC6679F917FB85C5 /* FileOperationServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51B056B24F605E5B72AAF040 /* FileOperationServiceTests.swift */; };
+		11070D15585968AC8ED7E2D9 /* ArchiveOperationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BA5ED883DF029A95F662B80 /* ArchiveOperationTests.swift */; };
 		110D361C68AF00C83B61BF0C /* WorkspaceTemplateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 445A76C5527EB6E25D6B0738 /* WorkspaceTemplateStore.swift */; };
+		139726AB40EEC6CC592A0A45 /* BatchRenameEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C93439FBAC9178C115818C3 /* BatchRenameEngineTests.swift */; };
 		25A4BE6460C97FECB5DCD607 /* RenameSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53D77B6BE8CFE05DB7EFDBE8 /* RenameSheet.swift */; };
 		25B7C2C99E34D89593E66F5A /* DirectoryMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4B6980AA55AF791A78D9532 /* DirectoryMonitor.swift */; };
 		2A4332CC141A94C6F7F4C83C /* BrowserLocation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91EEC915B26864ECE2CA4DD8 /* BrowserLocation.swift */; };
@@ -23,6 +25,7 @@
 		788258599F4078CCB973660B /* FileItemTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3DB8A9C48FD94E7A4741BE5 /* FileItemTests.swift */; };
 		7CB87A60F32132F679DC1C67 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06C0F5BB0C64FA6BF498A7DD /* main.swift */; };
 		7E483BDE7E3105CB6D347711 /* PathBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78DA56452FBD8D4ED213F84C /* PathBarView.swift */; };
+		8058104C38913DB3340D2148 /* BatchRenameEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC515A3934BE36C9832BF627 /* BatchRenameEngine.swift */; };
 		81706A4AD14DE6CCB219AF5E /* ExternalOpenRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = C51B17CC51D039EBE81CF809 /* ExternalOpenRequest.swift */; };
 		88E9C87C8F4CE484830FE867 /* LayoutManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 705E10C5B1AE71D5ED140007 /* LayoutManagerTests.swift */; };
 		94A94C23D9FC00A87F160196 /* FileItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3EE0F6EB779A0C48C755723 /* FileItem.swift */; };
@@ -33,6 +36,7 @@
 		BB7830BA34903074D4DAD53A /* FileClipboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10D54B46DC62B3D9EC526A6A /* FileClipboard.swift */; };
 		C7950892B535B8EA18D84EE3 /* FileListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67D8DABCB154486D40A867DD /* FileListView.swift */; };
 		D0D9F7BBC005885E02F91DD9 /* IconCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45584B3388FB270698ACDA84 /* IconCache.swift */; };
+		D676D80DD3694BBF16913DC0 /* BatchRenameSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB44C1CE4356030487D795F5 /* BatchRenameSheet.swift */; };
 		DF7BD06F5D19C31E5AC65F3F /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E107ACB45970C4B93AC1B778 /* ContentView.swift */; };
 		E44A2FC3B8EBB7D55734E7F3 /* FileBrowserViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0671CA49995511119494EE21 /* FileBrowserViewModel.swift */; };
 		EF0B954B30A7433A1009086F /* FileBrowserViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77F668F258A38637E866EDBA /* FileBrowserViewModelTests.swift */; };
@@ -63,6 +67,7 @@
 		06C0F5BB0C64FA6BF498A7DD /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		10D54B46DC62B3D9EC526A6A /* FileClipboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileClipboard.swift; sourceTree = "<group>"; };
 		11238B9B349B0A590E983336 /* FileBrowserPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBrowserPane.swift; sourceTree = "<group>"; };
+		1BA5ED883DF029A95F662B80 /* ArchiveOperationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveOperationTests.swift; sourceTree = "<group>"; };
 		1D89C6F66E2C191657CFF4A4 /* MultiFinderTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MultiFinderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2584D6122AAD197C878837D0 /* MultiFinder.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MultiFinder.entitlements; sourceTree = "<group>"; };
 		375AAEE7EE3640C7AB5FB958 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
@@ -82,11 +87,14 @@
 		82557BDCBDA35EF9B49E77A6 /* LayoutManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutManager.swift; sourceTree = "<group>"; };
 		86EEF2B4325FD5736CBAF440 /* FavoritesStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritesStore.swift; sourceTree = "<group>"; };
 		892C836D15B2B1EB67109FC5 /* ExternalIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalIntegrationTests.swift; sourceTree = "<group>"; };
+		8C93439FBAC9178C115818C3 /* BatchRenameEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatchRenameEngineTests.swift; sourceTree = "<group>"; };
 		91EEC915B26864ECE2CA4DD8 /* BrowserLocation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserLocation.swift; sourceTree = "<group>"; };
 		9414CFA53A150CFAABE6A865 /* WorkspaceLayoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceLayoutView.swift; sourceTree = "<group>"; };
 		A4B6980AA55AF791A78D9532 /* DirectoryMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectoryMonitor.swift; sourceTree = "<group>"; };
+		AC515A3934BE36C9832BF627 /* BatchRenameEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatchRenameEngine.swift; sourceTree = "<group>"; };
 		B0C55A716675E551BA88676E /* ITermService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ITermService.swift; sourceTree = "<group>"; };
 		B2E05E259EB891B66AC203CC /* MultiFinderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiFinderApp.swift; sourceTree = "<group>"; };
+		BB44C1CE4356030487D795F5 /* BatchRenameSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatchRenameSheet.swift; sourceTree = "<group>"; };
 		C51B17CC51D039EBE81CF809 /* ExternalOpenRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalOpenRequest.swift; sourceTree = "<group>"; };
 		DE773915D5DE13A82CCFED77 /* FavoritesStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritesStoreTests.swift; sourceTree = "<group>"; };
 		E107ACB45970C4B93AC1B778 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -163,6 +171,8 @@
 		BC709CAF3B0CFA5C5AE781A1 /* MultiFinderTests */ = {
 			isa = PBXGroup;
 			children = (
+				1BA5ED883DF029A95F662B80 /* ArchiveOperationTests.swift */,
+				8C93439FBAC9178C115818C3 /* BatchRenameEngineTests.swift */,
 				892C836D15B2B1EB67109FC5 /* ExternalIntegrationTests.swift */,
 				DE773915D5DE13A82CCFED77 /* FavoritesStoreTests.swift */,
 				77F668F258A38637E866EDBA /* FileBrowserViewModelTests.swift */,
@@ -178,6 +188,7 @@
 		D195284BF93ADAA72BE45A07 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				BB44C1CE4356030487D795F5 /* BatchRenameSheet.swift */,
 				E107ACB45970C4B93AC1B778 /* ContentView.swift */,
 				11238B9B349B0A590E983336 /* FileBrowserPane.swift */,
 				67D8DABCB154486D40A867DD /* FileListView.swift */,
@@ -192,6 +203,7 @@
 		E1D561E527B6AA95A421F655 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				AC515A3934BE36C9832BF627 /* BatchRenameEngine.swift */,
 				A4B6980AA55AF791A78D9532 /* DirectoryMonitor.swift */,
 				86EEF2B4325FD5736CBAF440 /* FavoritesStore.swift */,
 				10D54B46DC62B3D9EC526A6A /* FileClipboard.swift */,
@@ -347,6 +359,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				11070D15585968AC8ED7E2D9 /* ArchiveOperationTests.swift in Sources */,
+				139726AB40EEC6CC592A0A45 /* BatchRenameEngineTests.swift in Sources */,
 				9C2A094FD649E6C917B99B57 /* ExternalIntegrationTests.swift in Sources */,
 				BAC50EAD4DB2DAA292B1B82B /* FavoritesStoreTests.swift in Sources */,
 				EF0B954B30A7433A1009086F /* FileBrowserViewModelTests.swift in Sources */,
@@ -362,6 +376,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8058104C38913DB3340D2148 /* BatchRenameEngine.swift in Sources */,
+				D676D80DD3694BBF16913DC0 /* BatchRenameSheet.swift in Sources */,
 				2A4332CC141A94C6F7F4C83C /* BrowserLocation.swift in Sources */,
 				DF7BD06F5D19C31E5AC65F3F /* ContentView.swift in Sources */,
 				25B7C2C99E34D89593E66F5A /* DirectoryMonitor.swift in Sources */,
