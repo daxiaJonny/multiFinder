@@ -1,6 +1,7 @@
 # AI 整理功能设计文档
 
-> 对应《开发计划》批次三 3.4。状态：设计定稿，待实现。
+> 对应《开发计划》批次三 3.4。状态：已实现（2026-07-27，四 agent 并行完成）。
+> 注意：使用前需本机 Cursor CLI 已登录（`agent login`）。
 > 结论先行：AI 后端采用本机 Cursor CLI（`agent` 命令），AI 只产出"结构化计划"，
 > 一切文件变更由 MultiFinder 的 FileOperationService 执行——可预览、可取消、可撤销。
 
