@@ -85,8 +85,8 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         backHistory: [BrowserLocation] = [],
         forwardHistory: [BrowserLocation] = [],
         operationService: FileOperationService = .shared,
-        aiPlanner: any AIPlanner = PlaceholderAIPlanner(),
-        aiPlannerAvailable: Bool = PlaceholderAIPlanner().isAvailable
+        aiPlanner: any AIPlanner = CursorCLIPlanner.shared,
+        aiPlannerAvailable: Bool = CursorCLIPlanner.shared.isAvailable
     ) {
         self.location = Self.normalized(location)
         self.sortOrder = [FileItemComparator(field: sortField, order: sortAscending ? .forward : .reverse)]
