@@ -2,7 +2,15 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Intentionally not sandboxed: browsing arbitrary filesystem locations is
+	     the app's core feature. Distribution is Developer ID + notarization,
+	     not the App Store. See docs/DISTRIBUTION.md. -->
 	<key>com.apple.security.app-sandbox</key>
 	<false/>
+	<!-- Hardened Runtime exception: ITermService uses NSAppleScript to send
+	     Apple Events to iTerm2 (matched by NSAppleEventsUsageDescription in
+	     Info.plist). -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
 </dict>
 </plist>

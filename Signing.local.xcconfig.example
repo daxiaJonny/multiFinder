@@ -1,0 +1,3 @@
+// Copy this file to Signing.local.xcconfig (gitignored) and fill in your
+// Apple Developer Team ID. Used by Release builds for Developer ID signing.
+DEVELOPMENT_TEAM = YOUR_TEAM_ID

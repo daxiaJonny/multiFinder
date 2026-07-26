@@ -9,6 +9,11 @@ settings:
     SWIFT_VERSION: "5.9"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
     SWIFT_STRICT_CONCURRENCY: complete
+# Release signing (Developer ID) pulls DEVELOPMENT_TEAM from the optional,
+# untracked Signing.local.xcconfig via the tracked Signing.release.xcconfig.
+# See docs/DISTRIBUTION.md. Debug stays unsigned with no Hardened Runtime.
+configFiles:
+  Release: Signing.release.xcconfig
 targets:
   MultiFinder:
     type: application
@@ -43,6 +48,11 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         COMBINE_HIDPI_IMAGES: YES
         ENABLE_HARDENED_RUNTIME: NO
+      configs:
+        Release:
+          ENABLE_HARDENED_RUNTIME: YES
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Developer ID Application"
   mfd:
     type: tool
     platform: macOS
@@ -53,6 +63,12 @@ targets:
         PRODUCT_NAME: mfd
         CODE_SIGN_IDENTITY: "-"
         CODE_SIGN_STYLE: Manual
+        ENABLE_HARDENED_RUNTIME: NO
+      configs:
+        Release:
+          ENABLE_HARDENED_RUNTIME: YES
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Developer ID Application"
   MultiFinderTests:
     type: bundle.unit-test
     platform: macOS

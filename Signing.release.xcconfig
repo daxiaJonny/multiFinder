@@ -1,0 +1,5 @@
+// Tracked Release signing configuration.
+// Pulls the Developer ID team from the untracked Signing.local.xcconfig if it
+// exists; the project still builds (unsigned) for anyone without it.
+// See docs/DISTRIBUTION.md for setup.
+#include? "Signing.local.xcconfig"

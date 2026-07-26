@@ -1,3 +1,6 @@
+# Local signing configuration (see docs/DISTRIBUTION.md)
+Signing.local.xcconfig
+
 # Xcode and XcodeGen output
 build/
 DerivedData/
