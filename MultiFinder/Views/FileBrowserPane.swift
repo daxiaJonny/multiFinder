@@ -210,7 +210,7 @@ private struct PaneTabContent: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if viewModel.isAIAssistantVisible && viewModel.isAIAssistantAvailable {
+            if viewModel.isAIAssistantVisible && viewModel.isAIAssistantAvailable && viewModel.currentURL != nil {
                 AIInputBar(viewModel: viewModel)
 
                 Divider()
@@ -259,8 +259,11 @@ private struct PaneTabContent: View {
                 BatchRenameSheet(items: batchItems, viewModel: viewModel)
             }
         }
-        .sheet(item: $viewModel.aiPlanPreview) { preview in
-            AIPlanPreviewSheet(preview: preview, viewModel: viewModel)
+        .sheet(isPresented: $viewModel.isSearchPresented) {
+            FileSearchSheet(viewModel: viewModel)
+        }
+        .sheet(isPresented: $viewModel.isAIOrganizePresented, onDismiss: viewModel.dismissAIOrganize) {
+            AIOrganizeFlowSheet(viewModel: viewModel)
         }
         .alert("Error", isPresented: showErrorBinding) {
             Button("OK", role: .cancel) {}

@@ -188,6 +188,26 @@ private struct BrowserToolbar: ToolbarContent {
             .disabled(pane.currentURL == nil)
             .help(isCurrentFolderFavorite ? "Remove from Favorites" : "Add to Favorites")
 
+            Button(action: pane.presentSearch) {
+                Image(systemName: "magnifyingglass")
+                    .accessibilityLabel("搜索")
+            }
+            .help("搜索")
+
+            Button(action: pane.toggleAIAssistant) {
+                Image(systemName: "sparkles")
+                    .accessibilityLabel("询问当前文件夹")
+            }
+            .disabled(pane.currentURL == nil || !pane.isAIAssistantAvailable)
+            .help(pane.isAIAssistantAvailable ? "询问当前文件夹" : "未安装 Cursor CLI")
+
+            Button(action: pane.presentAIOrganize) {
+                Image(systemName: "wand.and.stars")
+                    .accessibilityLabel("AI 整理")
+            }
+            .disabled(pane.currentURL == nil || !pane.isAIAssistantAvailable)
+            .help(pane.isAIAssistantAvailable ? "AI 整理" : "未安装 Cursor CLI")
+
             Button(action: pane.newFolder) {
                 Image(systemName: "folder.badge.plus")
             }

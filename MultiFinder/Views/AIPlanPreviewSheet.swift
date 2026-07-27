@@ -44,13 +44,13 @@ struct AIPlanPreviewSheet: View {
             }
 
             HStack {
-                Button("Cancel") { dismiss() }
+                Button("取消") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Spacer()
                 Text(summary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Button("Run \(includedIndices.count) Operation\(includedIndices.count == 1 ? "" : "s")") {
+                Button("执行 \(includedIndices.count) 项操作") {
                     run()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -188,7 +188,7 @@ struct AIPlanPreviewSheet: View {
     }
 
     private var summary: String {
-        "\(includedIndices.count) of \(operations.count) selected"
+        "已选择 \(includedIndices.count) / \(operations.count) 项"
     }
 
     private func run() {

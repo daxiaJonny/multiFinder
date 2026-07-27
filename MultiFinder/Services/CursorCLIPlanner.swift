@@ -9,22 +9,22 @@ enum CursorCLIPlannerError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .notInstalled:
-            return "The Cursor CLI (agent) is not installed. Install it or set its path in Settings."
+            return "未安装 Cursor CLI（agent）。请先安装，或在设置中指定它的路径。"
         case .timedOut:
-            return "The AI planner took too long to respond and was stopped."
+            return "AI 响应超时，已停止本次任务。"
         case .processFailed(let message):
             return message.isEmpty
-                ? "The AI planner exited with an error."
-                : "The AI planner failed: \(message)"
+                ? "AI 运行出错。"
+                : "AI 运行失败：\(message)"
         case .unparseableOutput(let message):
             return message.isEmpty
-                ? "The AI response could not be understood."
-                : "The AI response could not be understood: \(message)"
+                ? "无法理解 AI 返回的内容。"
+                : "无法理解 AI 返回的内容：\(message)"
         }
     }
 }
 
-final class CursorCLIPlanner: AIPlanner {
+final class CursorCLIPlanner: AIPlanner, AIQuestionAnswering {
     static let shared = CursorCLIPlanner()
     static let executablePathDefaultsKey = "AIPlannerExecutablePath"
 
@@ -44,7 +44,12 @@ final class CursorCLIPlanner: AIPlanner {
         guard isAvailable else { throw CursorCLIPlannerError.notInstalled }
 
         let today = Date.now
-        let firstOutput = try await run(prompt: Self.prompt(for: request, today: today), in: request.scopeRoot)
+        let firstOutput = try await run(
+            prompt: Self.prompt(for: request, today: today),
+            in: request.scopeRoot,
+            mode: "plan",
+            outputFormat: "json"
+        )
         let firstError: AIPlanParseError
         do {
             return try Self.parsePlan(fromCLIOutput: firstOutput)
@@ -58,12 +63,32 @@ final class CursorCLIPlanner: AIPlanner {
             previousOutput: firstOutput,
             parseError: firstError
         )
-        let secondOutput = try await run(prompt: retryPrompt, in: request.scopeRoot)
+        let secondOutput = try await run(
+            prompt: retryPrompt,
+            in: request.scopeRoot,
+            mode: "plan",
+            outputFormat: "json"
+        )
         do {
             return try Self.parsePlan(fromCLIOutput: secondOutput)
         } catch let error as AIPlanParseError {
             throw CursorCLIPlannerError.unparseableOutput(error.message)
         }
+    }
+
+    func answer(_ request: AIAssistantRequest) async throws -> String {
+        guard isAvailable else { throw CursorCLIPlannerError.notInstalled }
+        let output = try await run(
+            prompt: Self.answerPrompt(for: request),
+            in: request.scopeRoot,
+            mode: "ask",
+            outputFormat: "text"
+        )
+        let answer = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !answer.isEmpty else {
+            throw CursorCLIPlannerError.unparseableOutput("AI 返回了空内容。")
+        }
+        return answer
     }
 
     private static func resolveExecutableURL() -> URL {
@@ -89,20 +114,12 @@ final class CursorCLIPlanner: AIPlanner {
 
         User request: \(request.instruction)
 
-        Answer with a single JSON object following exactly this contract:
+        Create an organization plan and answer with a single JSON object following exactly this contract:
         {
-          "kind": "search" or "organize",
+          "kind": "organize",
           "summary": "one short sentence describing the plan for the user",
-          "search": { ... },      // required when kind is "search", omitted otherwise
-          "operations": [ ... ]   // required when kind is "organize", omitted otherwise
+          "operations": [ ... ]
         }
-
-        "search" is a criteria object with these optional fields:
-        - "nameContains": array of file-name substrings, matched as OR
-        - "extensions": array of file extensions without the dot, e.g. ["png", "jpg"]
-        - "modifiedAfter", "modifiedBefore": ISO dates formatted "YYYY-MM-DD"
-        - "minSize", "maxSize": sizes in bytes
-        - "recursive": boolean, whether to search subfolders
 
         "operations" is an array whose entries take exactly one of these five forms:
         {"op": "createFolder", "path": "relative/folder"}
@@ -112,15 +129,35 @@ final class CursorCLIPlanner: AIPlanner {
         {"op": "trash", "source": "relative/file"}
 
         Rules:
-        - If the request is about finding files, use kind "search" and return only \
-        the criteria. Do NOT list matching files; the app runs the search itself.
-        - If the request is about organizing files, use kind "organize", inspect the \
-        directory, and enumerate one concrete operation per affected file. No \
-        wildcards, no shell commands, no placeholders.
+        - Inspect the directory and enumerate one concrete operation per affected file. \
+        No wildcards, no shell commands, no placeholders.
         - "destination" must include the target file name, and "newName" is a bare \
         file name without any path.
+        - Write "summary" in the same language as the user's request.
         - Your final answer must be ONLY the JSON object itself: no markdown code \
         fences, no explanations, no text before or after it.
+        """
+    }
+
+    static func answerPrompt(for request: AIAssistantRequest) -> String {
+        let history = request.previousExchanges.suffix(6).map { exchange in
+            "User: \(exchange.question)\nAssistant: \(exchange.answer)"
+        }.joined(separator: "\n\n")
+        let historySection = history.isEmpty ? "" : """
+
+        Recent conversation:
+        \(history)
+
+        """
+
+        return """
+        The user's current folder is \(request.scopeRoot.standardizedFileURL.path).
+        Answer the user's question directly. Inspect this folder and its contents when \
+        that helps. This is a read-only conversation: do not modify files. When referring \
+        to local items, use paths relative to the current folder. You may answer questions \
+        unrelated to the folder normally. Reply in the same language as the user's current \
+        question unless the user explicitly asks for another language.
+        \(historySection)Current question: \(request.question)
         """
     }
 
@@ -217,7 +254,12 @@ final class CursorCLIPlanner: AIPlanner {
 
     // MARK: - Process
 
-    private func run(prompt: String, in scopeRoot: URL) async throws -> String {
+    private func run(
+        prompt: String,
+        in scopeRoot: URL,
+        mode: String,
+        outputFormat: String
+    ) async throws -> String {
         let executableURL = executableURL
         let timeout = timeout
         let worker = Task.detached(priority: .userInitiated) {
@@ -225,7 +267,9 @@ final class CursorCLIPlanner: AIPlanner {
                 executableURL: executableURL,
                 prompt: prompt,
                 currentDirectory: scopeRoot,
-                timeout: timeout
+                timeout: timeout,
+                mode: mode,
+                outputFormat: outputFormat
             )
         }
         return try await withTaskCancellationHandler {
@@ -239,11 +283,13 @@ final class CursorCLIPlanner: AIPlanner {
         executableURL: URL,
         prompt: String,
         currentDirectory: URL,
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        mode: String,
+        outputFormat: String
     ) throws -> String {
         let process = Process()
         process.executableURL = executableURL
-        process.arguments = ["-p", "--mode", "plan", "--trust", "--output-format", "json", prompt]
+        process.arguments = ["-p", "--mode", mode, "--trust", "--output-format", outputFormat, prompt]
         process.currentDirectoryURL = currentDirectory
         process.standardInput = FileHandle.nullDevice
 

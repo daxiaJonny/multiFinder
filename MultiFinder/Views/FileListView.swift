@@ -9,6 +9,8 @@ struct FileListView: View {
     let onQuickLook: () -> Void
     let onRename: (FileItem) -> Void
 
+    @State private var dropTargetFolderID: FileItem.ID?
+
     var body: some View {
         Table(
             of: FileItem.self,
@@ -16,45 +18,54 @@ struct FileListView: View {
             sortOrder: focusedSortOrder
         ) {
             TableColumn("Name", sortUsing: FileItemComparator(field: .name)) { item in
-                HStack(spacing: 6) {
-                    Image(nsImage: IconCache.shared.icon(for: item.url.path))
-                        .resizable()
-                        .interpolation(.high)
-                        .frame(width: 16, height: 16)
-                    Text(item.name)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    if item.isSymlink {
-                        Image(systemName: "arrowshape.turn.up.right")
-                            .font(.system(size: 8))
-                            .foregroundStyle(.tertiary)
+                folderDropCell(for: item) {
+                    HStack(spacing: 6) {
+                        Image(nsImage: IconCache.shared.icon(for: item.url.path))
+                            .resizable()
+                            .interpolation(.high)
+                            .frame(width: 16, height: 16)
+                        Text(item.name)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        if item.isSymlink {
+                            Image(systemName: "arrowshape.turn.up.right")
+                                .font(.system(size: 8))
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                 }
             }
             .width(min: 140, ideal: 280)
 
             TableColumn("Date Modified", sortUsing: FileItemComparator(field: .date)) { item in
-                Text(item.modificationDate, format: .dateTime.year().month(.twoDigits).day().hour().minute())
-                    .foregroundStyle(.secondary)
+                folderDropCell(for: item) {
+                    Text(item.modificationDate, format: .dateTime.year().month(.twoDigits).day().hour().minute())
+                        .foregroundStyle(.secondary)
+                }
             }
             .width(min: 125, ideal: 160, max: 220)
 
             TableColumn("Size", sortUsing: FileItemComparator(field: .size)) { item in
-                Text(item.isDirectory ? "--" : ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file))
-                    .foregroundStyle(.secondary)
+                folderDropCell(for: item) {
+                    Text(item.isDirectory ? "--" : ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file))
+                        .foregroundStyle(.secondary)
+                }
             }
             .width(min: 65, ideal: 85, max: 130)
 
             TableColumn("Kind", sortUsing: FileItemComparator(field: .kind)) { item in
-                Text(item.kind)
-                    .foregroundStyle(.secondary)
+                folderDropCell(for: item) {
+                    Text(item.kind)
+                        .foregroundStyle(.secondary)
+                }
             }
             .width(min: 90, ideal: 130, max: 220)
         } rows: {
             ForEach(viewModel.items) { item in
                 TableRow(item)
                     .itemProvider {
-                        NSItemProvider(contentsOf: item.url)
+                        guard FileDropSafety.canStartDragging(item) else { return nil }
+                        return NSItemProvider(contentsOf: item.url)
                     }
             }
         }
@@ -178,6 +189,34 @@ struct FileListView: View {
         return items.allSatisfy { $0.url.deletingLastPathComponent() == parent }
     }
 
+    @ViewBuilder
+    private func folderDropCell<Content: View>(
+        for item: FileItem,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        let cell = content()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .background(
+                dropTargetFolderID == item.id
+                    ? Color.accentColor.opacity(0.22)
+                    : Color.clear
+            )
+
+        if item.isDirectory && !item.isPackage {
+            cell.onDrop(
+                of: [UTType.fileURL],
+                delegate: FolderRowDropDelegate(
+                    target: item,
+                    viewModel: viewModel,
+                    targetedFolderID: $dropTargetFolderID
+                )
+            )
+        } else {
+            cell
+        }
+    }
+
     private func open(selection: Set<FileItem.ID>) {
         onFocus()
         let selectedItems = items(for: selection)
@@ -225,5 +264,97 @@ struct FileListView: View {
                 viewModel.sortOrder = sortOrder
             }
         )
+    }
+}
+
+private struct FolderRowDropDelegate: DropDelegate {
+    let target: FileItem
+    let viewModel: FileBrowserViewModel
+    @Binding var targetedFolderID: FileItem.ID?
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [.fileURL])
+    }
+
+    func dropEntered(info: DropInfo) {
+        guard validateDrop(info: info) else { return }
+        targetedFolderID = target.id
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        guard validateDrop(info: info) else {
+            return DropProposal(operation: .forbidden)
+        }
+        return DropProposal(operation: currentOperation == .copy ? .copy : .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        if targetedFolderID == target.id {
+            targetedFolderID = nil
+        }
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let providers = info.itemProviders(for: [.fileURL])
+        guard !providers.isEmpty else { return false }
+        let operation = currentOperation
+        targetedFolderID = nil
+
+        DroppedFileURLLoader.load(providers) { urls in
+            viewModel.transferDroppedItems(urls, into: target.url, operation: operation)
+        }
+        return true
+    }
+
+    private var currentOperation: FileDropOperation {
+        NSEvent.modifierFlags.contains(.option) ? .copy : .move
+    }
+}
+
+private enum DroppedFileURLLoader {
+    static func load(_ providers: [NSItemProvider], completion: @escaping ([URL]) -> Void) {
+        let collector = DroppedFileURLCollector()
+        let group = DispatchGroup()
+
+        for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            group.enter()
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                defer { group.leave() }
+                if let url = fileURL(from: item) {
+                    collector.append(url)
+                }
+            }
+        }
+
+        group.notify(queue: .main) {
+            completion(collector.urls)
+        }
+    }
+
+    private static func fileURL(from item: NSSecureCoding?) -> URL? {
+        if let url = item as? URL {
+            return url
+        }
+        if let data = item as? Data {
+            return URL(dataRepresentation: data, relativeTo: nil)
+        }
+        return nil
+    }
+}
+
+private final class DroppedFileURLCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [URL] = []
+
+    func append(_ url: URL) {
+        lock.lock()
+        storage.append(url)
+        lock.unlock()
+    }
+
+    var urls: [URL] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
     }
 }

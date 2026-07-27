@@ -48,7 +48,7 @@ enum PlanValidator {
     ) throws -> PlanValidationResult {
         guard operations.count <= maximumOperationCount else {
             throw PlanValidationError(
-                message: "The plan contains \(operations.count) operations; the limit is \(maximumOperationCount)."
+                message: "整理方案包含 \(operations.count) 项操作，最多允许 \(maximumOperationCount) 项。"
             )
         }
 
@@ -83,7 +83,7 @@ enum PlanValidator {
                 let parentOnDisk = fileManager.fileExists(atPath: parent.path) && !removedPaths.contains(parentKey)
                 if parent.path != root.path && !parentOnDisk && !createdPaths.contains(parentKey) {
                     issues.append(OperationIssue(
-                        message: "The parent folder for “\(item.destinationDisplay ?? destination.lastPathComponent)” does not exist."
+                        message: "“\(item.destinationDisplay ?? destination.lastPathComponent)”的上级文件夹不存在。"
                     ))
                 }
             }
@@ -92,12 +92,12 @@ enum PlanValidator {
                 let key = pathKey(destination)
                 let display = item.destinationDisplay ?? destination.lastPathComponent
                 if destinationCounts[key, default: 0] > 1 {
-                    issues.append(OperationIssue(message: "Multiple operations target “\(display)”."))
+                    issues.append(OperationIssue(message: "多项操作的目标都是“\(display)”。"))
                 }
                 let isCaseOnlySelfTarget = item.source.map { pathKey($0) == key } ?? false
                 let occupiedOnDisk = fileManager.fileExists(atPath: destination.path) && !removedPaths.contains(key)
                 if !isCaseOnlySelfTarget && (occupiedOnDisk || createdPaths.contains(key)) {
-                    issues.append(OperationIssue(message: "An item named “\(display)” already exists."))
+                    issues.append(OperationIssue(message: "已存在名为“\(display)”的项目。"))
                 }
             }
 
@@ -190,7 +190,7 @@ enum PlanValidator {
     private static func resolveSourcePath(_ relativePath: String, in root: URL) throws -> URL {
         let resolved = try resolvePath(relativePath, in: root)
         guard resolved.path != root.path else {
-            throw PlanValidationError(message: "The plan may not operate on the current folder itself.")
+            throw PlanValidationError(message: "整理方案不能操作当前文件夹本身。")
         }
         return resolved
     }
@@ -198,7 +198,7 @@ enum PlanValidator {
     private static func resolvePath(_ relativePath: String, in root: URL) throws -> URL {
         let trimmed = relativePath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            throw PlanValidationError(message: "The plan contains an operation with an empty path.")
+            throw PlanValidationError(message: "整理方案中存在路径为空的操作。")
         }
         guard !trimmed.hasPrefix("/"), !trimmed.hasPrefix("~") else {
             throw PlanValidationError(

@@ -10,6 +10,11 @@ enum SortField: String, CaseIterable, Codable, Sendable {
     case kind = "Kind"
 }
 
+enum FileDropOperation: Sendable, Equatable {
+    case move
+    case copy
+}
+
 @MainActor
 final class FileBrowserViewModel: ObservableObject, Identifiable {
     let id = UUID()
@@ -33,9 +38,15 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
     @Published var batchRenameItems: [FileItem]?
+    @Published var isSearchPresented = false
     @Published var isAIAssistantVisible = false
+    @Published private(set) var isAIAnswering = false
+    @Published private(set) var aiConversation: [AIAssistantExchange] = []
+    @Published private(set) var aiPendingQuestion: String?
+    @Published var aiAssistantErrorMessage: String?
+    @Published var isAIOrganizePresented = false
     @Published private(set) var isAIPlanning = false
-    @Published var aiErrorMessage: String?
+    @Published var aiOrganizeErrorMessage: String?
     @Published var aiPlanPreview: AIPlanPreview?
 
     private(set) var backHistory: [BrowserLocation]
@@ -69,11 +80,13 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
 
     private let operationService: FileOperationService
     private let aiPlanner: any AIPlanner
+    private let aiQuestionAnswerer: any AIQuestionAnswering
     let isAIAssistantAvailable: Bool
     private let directoryMonitor = DirectoryMonitor()
     private var loadTask: Task<Void, Never>?
     private var monitorRefreshTask: Task<Void, Never>?
     private var aiPlanTask: Task<Void, Never>?
+    private var aiAnswerTask: Task<Void, Never>?
     private var loadGeneration: UInt64 = 0
     private var pendingSelectionURL: URL?
 
@@ -86,6 +99,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         forwardHistory: [BrowserLocation] = [],
         operationService: FileOperationService = .shared,
         aiPlanner: any AIPlanner = CursorCLIPlanner.shared,
+        aiQuestionAnswerer: any AIQuestionAnswering = CursorCLIPlanner.shared,
         aiPlannerAvailable: Bool = CursorCLIPlanner.shared.isAvailable
     ) {
         self.location = Self.normalized(location)
@@ -95,6 +109,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         self.forwardHistory = forwardHistory.map(Self.normalized)
         self.operationService = operationService
         self.aiPlanner = aiPlanner
+        self.aiQuestionAnswerer = aiQuestionAnswerer
         self.isAIAssistantAvailable = aiPlannerAvailable
         configureDirectoryMonitor()
         reload()
@@ -108,6 +123,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         loadTask?.cancel()
         monitorRefreshTask?.cancel()
         aiPlanTask?.cancel()
+        aiAnswerTask?.cancel()
     }
 
     // MARK: - Loading
@@ -422,6 +438,16 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     }
 
     private func transition(to newLocation: BrowserLocation) {
+        cancelAIAnswering()
+        cancelAIPlanning()
+        aiConversation.removeAll()
+        aiAssistantErrorMessage = nil
+        aiOrganizeErrorMessage = nil
+        aiPlanPreview = nil
+        isAIOrganizePresented = false
+        if newLocation.directoryURL == nil {
+            isAIAssistantVisible = false
+        }
         location = Self.normalized(newLocation)
         selectedItems.removeAll()
         items.removeAll()
@@ -571,13 +597,82 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         }
     }
 
+    @discardableResult
+    func transferDroppedItems(
+        _ urls: [URL],
+        into destination: URL,
+        operation: FileDropOperation
+    ) -> Bool {
+        let destination = destination.standardizedFileURL
+        guard Self.isDirectory(destination) else { return false }
+
+        let sources = Self.validDropSources(urls, into: destination, operation: operation)
+        guard !sources.isEmpty else { return false }
+
+        let completion: (FileOperationResult) -> Void = { [weak self] result in
+            self?.finishOperation(result)
+        }
+        switch operation {
+        case .move:
+            operationService.moveDetailed(sources, to: destination, completion: completion)
+        case .copy:
+            operationService.copyDetailed(sources, to: destination, completion: completion)
+        }
+        return true
+    }
+
+    static func validDropSources(
+        _ urls: [URL],
+        into destination: URL,
+        operation: FileDropOperation
+    ) -> [URL] {
+        let destination = destination.standardizedFileURL
+        var seen: Set<URL> = []
+
+        return urls.compactMap { url in
+            let source = url.standardizedFileURL
+            guard seen.insert(source).inserted,
+                  source != destination,
+                  !FileDropSafety.isProtectedSource(source) else { return nil }
+
+            if operation == .move,
+               source.deletingLastPathComponent().standardizedFileURL == destination {
+                return nil
+            }
+
+            if Self.isRealDirectory(source),
+               Self.isDescendant(destination, of: source) {
+                return nil
+            }
+            return source
+        }
+    }
+
+    private static func isDirectory(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+    }
+
+    private static func isRealDirectory(_ url: URL) -> Bool {
+        guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else {
+            return false
+        }
+        return values.isDirectory == true && values.isSymbolicLink != true
+    }
+
+    private static func isDescendant(_ candidate: URL, of ancestor: URL) -> Bool {
+        let ancestorComponents = ancestor.standardizedFileURL.pathComponents
+        let candidateComponents = candidate.standardizedFileURL.pathComponents
+        guard candidateComponents.count > ancestorComponents.count else { return false }
+        return candidateComponents.prefix(ancestorComponents.count).elementsEqual(ancestorComponents)
+    }
+
     func revealInFinder() {
         let urls = selectedItemURLs
         guard !urls.isEmpty else { return }
         NSWorkspace.shared.activateFileViewerSelecting(urls)
     }
 
-    // MARK: - AI assistant
+    // MARK: - Search and AI
 
     struct AIPlanPreview: Identifiable {
         let id = UUID()
@@ -587,39 +682,108 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     }
 
     func toggleAIAssistant() {
-        guard isAIAssistantAvailable else { return }
+        guard isAIAssistantAvailable, currentURL != nil else { return }
         isAIAssistantVisible.toggle()
         if !isAIAssistantVisible {
-            cancelAIPlanning()
-            aiErrorMessage = nil
+            cancelAIAnswering()
+            aiAssistantErrorMessage = nil
         }
     }
 
-    func submitAIInstruction(_ instruction: String) {
+    func presentSearch() {
+        isSearchPresented = true
+    }
+
+    func presentAIOrganize() {
+        guard isAIAssistantAvailable, currentURL != nil else { return }
+        aiPlanPreview = nil
+        aiOrganizeErrorMessage = nil
+        isAIOrganizePresented = true
+    }
+
+    func dismissAIOrganize() {
+        cancelAIPlanning()
+        aiPlanPreview = nil
+        aiOrganizeErrorMessage = nil
+        isAIOrganizePresented = false
+    }
+
+    func submitAIQuestion(_ question: String) {
+        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !isAIAnswering else { return }
+        guard let scopeRoot = currentURL else {
+            aiAssistantErrorMessage = "请先打开一个文件夹再提问。"
+            return
+        }
+
+        aiAnswerTask?.cancel()
+        isAIAnswering = true
+        aiPendingQuestion = trimmed
+        aiAssistantErrorMessage = nil
+        let answerer = aiQuestionAnswerer
+        let previousExchanges = Array(aiConversation.suffix(6))
+
+        aiAnswerTask = Task { [weak self] in
+            defer {
+                self?.isAIAnswering = false
+                self?.aiPendingQuestion = nil
+            }
+            do {
+                let answer = try await answerer.answer(AIAssistantRequest(
+                    question: trimmed,
+                    scopeRoot: scopeRoot,
+                    previousExchanges: previousExchanges
+                ))
+                try Task.checkCancellation()
+                self?.aiConversation.append(AIAssistantExchange(question: trimmed, answer: answer))
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                self?.aiAssistantErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func cancelAIAnswering() {
+        aiAnswerTask?.cancel()
+        aiAnswerTask = nil
+        isAIAnswering = false
+        aiPendingQuestion = nil
+    }
+
+    func clearAIConversation() {
+        cancelAIAnswering()
+        aiConversation.removeAll()
+        aiAssistantErrorMessage = nil
+    }
+
+    func submitAIOrganizeInstruction(_ instruction: String) {
         let trimmed = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isAIPlanning else { return }
         guard let scopeRoot = currentURL else {
-            aiErrorMessage = "The AI assistant can only work inside a folder."
+            aiOrganizeErrorMessage = "请先打开一个文件夹再使用 AI 整理。"
             return
         }
 
         aiPlanTask?.cancel()
         isAIPlanning = true
-        aiErrorMessage = nil
+        aiOrganizeErrorMessage = nil
+        aiPlanPreview = nil
         let planner = aiPlanner
 
         aiPlanTask = Task { [weak self] in
+            defer { self?.isAIPlanning = false }
             do {
                 let plan = try await planner.plan(AIPlanRequest(instruction: trimmed, scopeRoot: scopeRoot))
                 try Task.checkCancellation()
-                self?.handleAIPlan(plan, instruction: trimmed, scopeRoot: scopeRoot)
+                self?.handleAIOrganizePlan(plan, scopeRoot: scopeRoot)
             } catch is CancellationError {
                 return
             } catch {
                 guard !Task.isCancelled else { return }
-                self?.aiErrorMessage = error.localizedDescription
+                self?.aiOrganizeErrorMessage = error.localizedDescription
             }
-            self?.isAIPlanning = false
         }
     }
 
@@ -636,21 +800,16 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         }
     }
 
-    private func handleAIPlan(_ plan: AIPlan, instruction: String, scopeRoot: URL) {
-        switch plan.kind {
-        case .search:
-            guard let criteria = plan.search else {
-                aiErrorMessage = "The search plan is missing its criteria."
-                return
-            }
-            navigate(to: .aiSearch(root: scopeRoot, criteria: criteria, title: instruction))
-        case .organize:
-            do {
-                let validation = try PlanValidator.validate(plan, scopeRoot: scopeRoot)
-                aiPlanPreview = AIPlanPreview(plan: plan, validation: validation, scopeRoot: scopeRoot)
-            } catch {
-                aiErrorMessage = error.localizedDescription
-            }
+    private func handleAIOrganizePlan(_ plan: AIPlan, scopeRoot: URL) {
+        guard plan.kind == .organize else {
+            aiOrganizeErrorMessage = "AI 返回了搜索结果，而不是文件整理方案。"
+            return
+        }
+        do {
+            let validation = try PlanValidator.validate(plan, scopeRoot: scopeRoot)
+            aiPlanPreview = AIPlanPreview(plan: plan, validation: validation, scopeRoot: scopeRoot)
+        } catch {
+            aiOrganizeErrorMessage = error.localizedDescription
         }
     }
 

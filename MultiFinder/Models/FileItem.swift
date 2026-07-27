@@ -91,6 +91,54 @@ struct FileItem: Identifiable, Hashable, Sendable {
 
 }
 
+enum FileDropSafety {
+    private static let protectedHomeDirectoryNames: Set<String> = [
+        ".Trash",
+        "Applications",
+        "Desktop",
+        "Documents",
+        "Downloads",
+        "Library",
+        "Movies",
+        "Music",
+        "Pictures",
+        "Public"
+    ]
+
+    static func canStartDragging(_ item: FileItem) -> Bool {
+        !item.isDirectory || !isProtectedSource(item.url)
+    }
+
+    static func isProtectedSource(
+        _ url: URL,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> Bool {
+        let source = url.standardizedFileURL
+        let home = homeDirectory.standardizedFileURL
+        let root = URL(fileURLWithPath: "/", isDirectory: true).standardizedFileURL
+
+        if source == root || source == home {
+            return true
+        }
+
+        if source.deletingLastPathComponent().standardizedFileURL == root {
+            return true
+        }
+
+        if source.deletingLastPathComponent().standardizedFileURL == home,
+           protectedHomeDirectoryNames.contains(source.lastPathComponent) {
+            return true
+        }
+
+        let volumes = root.appendingPathComponent("Volumes", isDirectory: true).standardizedFileURL
+        if source.deletingLastPathComponent().standardizedFileURL == volumes {
+            return true
+        }
+
+        return false
+    }
+}
+
 struct FileItemComparator: SortComparator, Hashable, Sendable {
     typealias Compared = FileItem
 

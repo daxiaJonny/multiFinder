@@ -21,6 +21,16 @@ final class CursorCLIPlannerTests: XCTestCase {
         AIPlanRequest(instruction: "tidy up the downloads", scopeRoot: scopeRoot)
     }
 
+    private var assistantRequest: AIAssistantRequest {
+        AIAssistantRequest(
+            question: "How many projects are here?",
+            scopeRoot: scopeRoot,
+            previousExchanges: [
+                AIAssistantExchange(question: "What is this folder?", answer: "A project workspace.")
+            ]
+        )
+    }
+
     private func makeScript(_ body: String) throws -> URL {
         let url = tempDir.appendingPathComponent("agent-\(UUID().uuidString).sh")
         try ("#!/bin/sh\n" + body + "\n").write(to: url, atomically: true, encoding: .utf8)
@@ -54,6 +64,7 @@ final class CursorCLIPlannerTests: XCTestCase {
         XCTAssertTrue(prompt.contains(scopeRoot.standardizedFileURL.path))
         XCTAssertTrue(prompt.contains(AISearchCriteria.isoDayString(from: .now)))
         XCTAssertTrue(prompt.contains("ONLY the JSON object"))
+        XCTAssertTrue(prompt.contains("same language as the user's request"))
     }
 
     func testPassesPlanModeAndJSONOutputFlags() async throws {
@@ -72,6 +83,42 @@ final class CursorCLIPlannerTests: XCTestCase {
             .split(separator: "\n").map(String.init)
         XCTAssertEqual(Array(lines.prefix(6)), ["-p", "--mode", "plan", "--trust", "--output-format", "json"])
         XCTAssertTrue(lines.dropFirst(5).joined(separator: "\n").contains("User request:"))
+    }
+
+    func testAnswersInAskModeWithTextOutput() async throws {
+        let capture = tempDir.appendingPathComponent("answer-args.txt")
+        let script = try makeScript("""
+        printf '%s\n' "$@" > '\(capture.path)'
+        printf 'There are 3 projects: api, web, and tools.'
+        """)
+        let planner = CursorCLIPlanner(executableURL: script)
+
+        let answer = try await planner.answer(assistantRequest)
+
+        XCTAssertEqual(answer, "There are 3 projects: api, web, and tools.")
+        let lines = try String(contentsOf: capture, encoding: .utf8)
+            .split(separator: "\n").map(String.init)
+        XCTAssertEqual(Array(lines.prefix(6)), ["-p", "--mode", "ask", "--trust", "--output-format", "text"])
+        let prompt = lines.dropFirst(6).joined(separator: "\n")
+        XCTAssertTrue(prompt.contains("How many projects are here?"))
+        XCTAssertTrue(prompt.contains("What is this folder?"))
+        XCTAssertTrue(prompt.contains(scopeRoot.standardizedFileURL.path))
+        XCTAssertTrue(prompt.contains("same language as the user's current"))
+    }
+
+    func testAnswerRejectsEmptyOutput() async throws {
+        let script = try makeScript("exit 0")
+        let planner = CursorCLIPlanner(executableURL: script)
+
+        do {
+            _ = try await planner.answer(assistantRequest)
+            XCTFail("Expected an empty response error")
+        } catch let error as CursorCLIPlannerError {
+            guard case .unparseableOutput(let message) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("空内容"))
+        }
     }
 
     func testPlansFromEnvelopeWrappedOutput() async throws {

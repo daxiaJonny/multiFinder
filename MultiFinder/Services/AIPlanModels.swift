@@ -1,5 +1,27 @@
 import Foundation
 
+struct AIAssistantExchange: Identifiable, Sendable, Equatable {
+    let id: UUID
+    let question: String
+    let answer: String
+
+    init(id: UUID = UUID(), question: String, answer: String) {
+        self.id = id
+        self.question = question
+        self.answer = answer
+    }
+}
+
+struct AIAssistantRequest: Sendable, Equatable {
+    let question: String
+    let scopeRoot: URL
+    let previousExchanges: [AIAssistantExchange]
+}
+
+protocol AIQuestionAnswering: Sendable {
+    func answer(_ request: AIAssistantRequest) async throws -> String
+}
+
 struct AIPlanRequest: Sendable, Equatable {
     let instruction: String
     let scopeRoot: URL
@@ -19,7 +41,7 @@ struct AIPlan: Codable, Sendable, Equatable {
             guard let kind = Kind(rawValue: raw) else {
                 throw DecodingError.dataCorrupted(DecodingError.Context(
                     codingPath: decoder.codingPath,
-                    debugDescription: "The plan kind “\(raw)” is not supported."
+                    debugDescription: "不支持“\(raw)”类型的方案。"
                 ))
             }
             self = kind
@@ -111,7 +133,7 @@ struct AISearchCriteria: Codable, Sendable, Hashable {
             throw DecodingError.dataCorruptedError(
                 forKey: key,
                 in: container,
-                debugDescription: "The date “\(string)” is not a valid ISO date (expected YYYY-MM-DD)."
+                debugDescription: "日期“\(string)”不是有效的 ISO 日期（应为 YYYY-MM-DD）。"
             )
         }
         return date
@@ -166,7 +188,7 @@ enum AIPlanOperation: Codable, Sendable, Hashable {
             throw DecodingError.dataCorruptedError(
                 forKey: .op,
                 in: container,
-                debugDescription: "The operation “\(op)” is not supported."
+                debugDescription: "不支持“\(op)”操作。"
             )
         }
     }
@@ -204,17 +226,17 @@ extension AIPlan {
         } catch let error as DecodingError {
             throw AIPlanParseError(message: message(for: error))
         } catch {
-            throw AIPlanParseError(message: "The AI plan could not be read: \(error.localizedDescription)")
+            throw AIPlanParseError(message: "无法读取 AI 方案：\(error.localizedDescription)")
         }
 
         switch plan.kind {
         case .search:
             guard plan.search != nil else {
-                throw AIPlanParseError(message: "The search plan is missing its “search” criteria.")
+                throw AIPlanParseError(message: "搜索方案缺少“search”条件。")
             }
         case .organize:
             guard let operations = plan.operations, !operations.isEmpty else {
-                throw AIPlanParseError(message: "The organize plan does not contain any operations.")
+                throw AIPlanParseError(message: "整理方案中没有任何操作。")
             }
         }
         return plan
@@ -222,7 +244,7 @@ extension AIPlan {
 
     private static func extractJSONObject(from text: String) throws -> String {
         guard let start = text.firstIndex(of: "{") else {
-            throw AIPlanParseError(message: "The AI response did not contain a JSON plan.")
+            throw AIPlanParseError(message: "AI 返回的内容中没有 JSON 方案。")
         }
         var depth = 0
         var inString = false
@@ -255,23 +277,23 @@ extension AIPlan {
             }
             index = text.index(after: index)
         }
-        throw AIPlanParseError(message: "The AI response contained an incomplete JSON plan.")
+        throw AIPlanParseError(message: "AI 返回的 JSON 方案不完整。")
     }
 
     private static func message(for error: DecodingError) -> String {
         switch error {
         case .keyNotFound(let key, let context):
-            return "The plan is missing the required field “\(fieldPath(context.codingPath, key))”."
+            return "方案缺少必填字段“\(fieldPath(context.codingPath, key))”。"
         case .valueNotFound(_, let context):
-            return "The plan field “\(fieldPath(context.codingPath))” has no value."
+            return "方案字段“\(fieldPath(context.codingPath))”没有值。"
         case .typeMismatch(_, let context):
-            return "The plan field “\(fieldPath(context.codingPath))” has the wrong type."
+            return "方案字段“\(fieldPath(context.codingPath))”的类型不正确。"
         case .dataCorrupted(let context):
             return context.debugDescription.isEmpty
-                ? "The AI response is not valid JSON."
+                ? "AI 返回的内容不是有效的 JSON。"
                 : context.debugDescription
         @unknown default:
-            return "The AI plan could not be read."
+            return "无法读取 AI 方案。"
         }
     }
 

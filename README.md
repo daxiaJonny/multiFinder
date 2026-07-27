@@ -14,6 +14,8 @@ xcodebuild -project MultiFinder.xcodeproj -scheme MultiFinder -configuration Deb
 
 The app uses native SwiftUI tables for keyboard and accessibility behavior. Browser locations explicitly distinguish directories, Recents, and Spotlight searches. A toolbar star stores frequently used folders in the shared sidebar favorites list. File mutations run through a serial background operation queue with conflict resolution, progress, cancellation, retry history, and undo/redo.
 
+The toolbar keeps file search, read-only folder questions, and AI organization as separate actions. Search uses Spotlight. Folder questions use the local Cursor CLI in `ask` mode and can be opened with Option-Command-A. AI organization uses a validated, previewable operation plan and never changes files before confirmation.
+
 ## Distribution
 
 MultiFinder ships via Developer ID independent distribution with Hardened Runtime and notarization — not the App Store, because App Sandbox would break browsing arbitrary filesystem locations, the app's core feature. Debug builds stay unsigned with Hardened Runtime disabled for development convenience; the Release configuration enables Hardened Runtime and manual Developer ID signing, with the team ID supplied by an untracked `Signing.local.xcconfig` (copy `Signing.local.xcconfig.example`) or the `DEVELOPMENT_TEAM` environment variable.

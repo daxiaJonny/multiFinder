@@ -115,11 +115,30 @@ struct MultiFinderApp: App {
                 .keyboardShortcut(".", modifiers: [.command, .shift])
                 .disabled(layoutManager == nil)
 
-                Button("AI Assistant…") {
+                Divider()
+
+                Button("搜索…") {
+                    layoutManager?.focusedPane?.presentSearch()
+                }
+                .keyboardShortcut("f", modifiers: .command)
+                .disabled(layoutManager == nil)
+
+                Button("询问当前文件夹…") {
                     layoutManager?.focusedPane?.toggleAIAssistant()
                 }
-                .keyboardShortcut("a", modifiers: [.command, .shift])
-                .disabled(layoutManager?.focusedPane?.isAIAssistantAvailable != true)
+                .keyboardShortcut("a", modifiers: [.command, .option])
+                .disabled(
+                    layoutManager?.focusedPane?.currentURL == nil ||
+                    layoutManager?.focusedPane?.isAIAssistantAvailable != true
+                )
+
+                Button("使用 AI 整理当前文件夹…") {
+                    layoutManager?.focusedPane?.presentAIOrganize()
+                }
+                .disabled(
+                    layoutManager?.focusedPane?.currentURL == nil ||
+                    layoutManager?.focusedPane?.isAIAssistantAvailable != true
+                )
             }
 
             CommandMenu("Go") {
