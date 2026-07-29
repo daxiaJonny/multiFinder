@@ -34,6 +34,32 @@ final class WorkspaceTemplateStoreTests: XCTestCase {
         XCTAssertEqual(makeStore(userDefaults: userDefaults).templates.first?.paneCount, 4)
     }
 
+    func testCreateRejectsDuplicateNameInsteadOfOverwriting() throws {
+        let (userDefaults, suiteName) = try makeUserDefaults()
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+        let store = makeStore(userDefaults: userDefaults)
+        let original = try XCTUnwrap(store.create(name: "Development", layoutState: makeLayout(paneCount: 1)))
+
+        XCTAssertNil(store.create(name: " development ", layoutState: makeLayout(paneCount: 3)))
+        XCTAssertEqual(store.templates, [original])
+    }
+
+    func testUpdateByIDOverwritesCurrentTemplateAndPreservesItsName() throws {
+        let (userDefaults, suiteName) = try makeUserDefaults()
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+        let store = makeStore(userDefaults: userDefaults)
+        let current = try XCTUnwrap(store.create(name: "Development", layoutState: makeLayout(paneCount: 1)))
+        _ = store.create(name: "Review", layoutState: makeLayout(paneCount: 2))
+
+        let updated = try XCTUnwrap(store.update(id: current.id, layoutState: makeLayout(paneCount: 4)))
+
+        XCTAssertEqual(updated.id, current.id)
+        XCTAssertEqual(updated.name, "Development")
+        XCTAssertEqual(updated.paneCount, 4)
+        XCTAssertEqual(store.templates.first(where: { $0.id == current.id })?.paneCount, 4)
+        XCTAssertEqual(makeStore(userDefaults: userDefaults).templates.count, 2)
+    }
+
     func testRemovePersistsAndCorruptStorageCanRecover() throws {
         let (userDefaults, suiteName) = try makeUserDefaults()
         defer { userDefaults.removePersistentDomain(forName: suiteName) }

@@ -39,9 +39,14 @@ struct FileBrowserPane: View {
                 )
         )
         .animation(.easeInOut(duration: 0.2), value: isHighlighted)
-        .onDrop(of: [UTType.fileURL], isTargeted: $isDropTargeted) { providers in
-            handleDrop(providers: providers)
-        }
+        .onDrop(
+            of: [UTType.fileURL],
+            delegate: PaneDropDelegate(
+                viewModel: pane.selectedTab,
+                isTargeted: $isDropTargeted,
+                onFocus: onFocus
+            )
+        )
         .contextMenu {
             paneContextMenu
         }
@@ -99,23 +104,49 @@ struct FileBrowserPane: View {
         isDropTargeted || isHighlighted ? 3 : (isFocused ? 1.5 : 0.5)
     }
 
-    private func handleDrop(providers: [NSItemProvider]) -> Bool {
-        let viewModel = pane.selectedTab
-        guard viewModel.canCreateItems else { return false }
-        onFocus()
-        var handled = false
-        for provider in providers {
-            guard provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) else { continue }
-            handled = true
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { data, _ in
-                guard let data = data as? Data,
-                      let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
-                DispatchQueue.main.async {
-                    viewModel.copyItems(from: [url])
-                }
-            }
+}
+
+private struct PaneDropDelegate: DropDelegate {
+    let viewModel: FileBrowserViewModel
+    @Binding var isTargeted: Bool
+    let onFocus: () -> Void
+
+    func validateDrop(info: DropInfo) -> Bool {
+        viewModel.canCreateItems && info.hasItemsConforming(to: [.fileURL])
+    }
+
+    func dropEntered(info: DropInfo) {
+        isTargeted = validateDrop(info: info)
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        guard validateDrop(info: info) else {
+            return DropProposal(operation: .forbidden)
         }
-        return handled
+        return DropProposal(operation: currentOperation == .copy ? .copy : .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        isTargeted = false
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard validateDrop(info: info),
+              let destination = viewModel.currentURL else { return false }
+        let providers = info.itemProviders(for: [.fileURL])
+        guard !providers.isEmpty else { return false }
+        let operation = currentOperation
+        isTargeted = false
+        onFocus()
+
+        DroppedFileURLLoader.load(providers) { urls in
+            viewModel.transferDroppedItems(urls, into: destination, operation: operation)
+        }
+        return true
+    }
+
+    private var currentOperation: FileDropOperation {
+        FileDropModifierKeys.currentOperation
     }
 }
 
@@ -230,6 +261,10 @@ private struct PaneTabContent: View {
                 onRefresh: {
                     onFocus()
                     viewModel.refresh()
+                },
+                onTransferDroppedItems: { urls, destination, operation in
+                    onFocus()
+                    viewModel.transferDroppedItems(urls, into: destination, operation: operation)
                 }
             )
 

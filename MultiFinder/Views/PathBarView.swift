@@ -1,4 +1,6 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct PathBarView: View {
     let location: BrowserLocation
@@ -6,9 +8,12 @@ struct PathBarView: View {
     let onNavigate: (URL) -> Void
     let onNavigateToFile: (URL) -> Void
     let onRefresh: () -> Void
+    let onTransferDroppedItems: ([URL], URL, FileDropOperation) -> Void
 
     @State private var isEditing = false
     @State private var pathText = ""
+    @State private var dropTargetURL: URL?
+    @FocusState private var isPathFieldFocused: Bool
 
     private var pathComponents: [(name: String, url: URL)] {
         guard case .directory(let url) = location else { return [] }
@@ -58,11 +63,19 @@ struct PathBarView: View {
                             .padding(.vertical, 3)
                             .background(
                                 RoundedRectangle(cornerRadius: 4)
-                                    .fill(index == pathComponents.count - 1 ? Color.accentColor.opacity(0.15) : .clear)
+                                    .fill(breadcrumbBackground(for: component.url, at: index))
                             )
                             .foregroundStyle(index == pathComponents.count - 1 ? Color.accentColor : .secondary)
                         }
                         .buttonStyle(.plain)
+                        .onDrop(
+                            of: [UTType.fileURL],
+                            delegate: BreadcrumbDropDelegate(
+                                destination: component.url,
+                                targetedURL: $dropTargetURL,
+                                onTransferDroppedItems: onTransferDroppedItems
+                            )
+                        )
 
                         if index < pathComponents.count - 1 {
                             Image(systemName: "chevron.right")
@@ -123,7 +136,15 @@ struct PathBarView: View {
             TextField("Path", text: $pathText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12, design: .monospaced))
+                .focused($isPathFieldFocused)
                 .onSubmit(commitPath)
+                .onKeyPress("a", phases: .down) { keyPress in
+                    guard keyPress.modifiers == .control,
+                          TextEditingCommandRouter.perform(#selector(NSText.selectAll(_:))) else {
+                        return .ignored
+                    }
+                    return .handled
+                }
             Button(action: commitPath) {
                 Image(systemName: "arrow.right.circle.fill")
             }
@@ -148,10 +169,18 @@ struct PathBarView: View {
         }
     }
 
+    private func breadcrumbBackground(for url: URL, at index: Int) -> Color {
+        if dropTargetURL == url {
+            return Color.accentColor.opacity(0.3)
+        }
+        return index == pathComponents.count - 1 ? Color.accentColor.opacity(0.15) : .clear
+    }
+
     private func startEditing() {
         guard let url = location.directoryURL else { return }
         pathText = url.path
         isEditing = true
+        isPathFieldFocused = true
     }
 
     private func commitPath() {
@@ -167,5 +196,49 @@ struct PathBarView: View {
         } else {
             onNavigateToFile(targetURL)
         }
+    }
+}
+
+private struct BreadcrumbDropDelegate: DropDelegate {
+    let destination: URL
+    @Binding var targetedURL: URL?
+    let onTransferDroppedItems: ([URL], URL, FileDropOperation) -> Void
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [.fileURL])
+    }
+
+    func dropEntered(info: DropInfo) {
+        guard validateDrop(info: info) else { return }
+        targetedURL = destination
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        guard validateDrop(info: info) else {
+            return DropProposal(operation: .forbidden)
+        }
+        return DropProposal(operation: currentOperation == .copy ? .copy : .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        if targetedURL == destination {
+            targetedURL = nil
+        }
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let providers = info.itemProviders(for: [.fileURL])
+        guard !providers.isEmpty else { return false }
+        let operation = currentOperation
+        targetedURL = nil
+
+        DroppedFileURLLoader.load(providers) { urls in
+            onTransferDroppedItems(urls, destination, operation)
+        }
+        return true
+    }
+
+    private var currentOperation: FileDropOperation {
+        FileDropModifierKeys.currentOperation
     }
 }

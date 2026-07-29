@@ -5,6 +5,7 @@ import SwiftUI
 struct MultiFinderApp: App {
     @Environment(\.openWindow) private var openWindow
     @FocusedValue(\.layoutManager) private var layoutManager: LayoutManager?
+    @FocusedValue(\.workspaceTemplateActions) private var workspaceTemplateActions: WorkspaceTemplateActions?
     @StateObject private var operationService = FileOperationService.shared
     @StateObject private var clipboard = FileClipboard.shared
     @StateObject private var favoritesStore = FavoritesStore.shared
@@ -38,6 +39,20 @@ struct MultiFinderApp: App {
             }
 
             CommandGroup(replacing: .saveItem) {
+                Button("保存工作区模板") {
+                    workspaceTemplateActions?.save()
+                }
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(workspaceTemplateActions == nil)
+
+                Button("另存工作区模板为…") {
+                    workspaceTemplateActions?.saveAs()
+                }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+                .disabled(workspaceTemplateActions == nil)
+
+                Divider()
+
                 Button("Close Tab") {
                     guard let id = layoutManager?.focusedPaneID else { return }
                     layoutManager?.closeTab(in: id)
@@ -52,45 +67,37 @@ struct MultiFinderApp: App {
             }
 
             CommandGroup(replacing: .undoRedo) {
-                Button("Undo File Operation") {
-                    operationService.undo()
+                Button("撤销文件操作") {
+                    undo()
                 }
                 .keyboardShortcut("z", modifiers: .command)
-                .disabled(!operationService.canUndo)
 
-                Button("Redo File Operation") {
-                    operationService.redo()
+                Button("重做文件操作") {
+                    redo()
                 }
-                .keyboardShortcut("z", modifiers: [.command, .shift])
-                .disabled(!operationService.canRedo)
+                .keyboardShortcut("y", modifiers: .command)
             }
 
             CommandGroup(replacing: .pasteboard) {
                 Button("Cut") {
-                    guard let urls = layoutManager?.focusedPane?.selectedItemURLs else { return }
-                    clipboard.cut(urls: urls)
+                    cut()
                 }
                 .keyboardShortcut("x", modifiers: .command)
-                .disabled(layoutManager?.focusedPane?.selectedItems.isEmpty != false)
 
                 Button("Copy") {
-                    guard let urls = layoutManager?.focusedPane?.selectedItemURLs else { return }
-                    clipboard.copy(urls: urls)
+                    copy()
                 }
                 .keyboardShortcut("c", modifiers: .command)
-                .disabled(layoutManager?.focusedPane?.selectedItems.isEmpty != false)
 
                 Button("Paste") {
                     paste()
                 }
                 .keyboardShortcut("v", modifiers: .command)
-                .disabled(!clipboard.hasContent || layoutManager?.focusedPane?.canCreateItems != true)
 
                 Button("Select All") {
-                    layoutManager?.focusedPane?.selectAll()
+                    selectAll()
                 }
                 .keyboardShortcut("a", modifiers: .command)
-                .disabled(layoutManager == nil)
 
                 Divider()
 
@@ -141,11 +148,11 @@ struct MultiFinderApp: App {
                 )
             }
 
-            CommandMenu("Go") {
-                Button("Back") { layoutManager?.focusedPane?.goBack() }
-                    .keyboardShortcut("[", modifiers: .command)
-                Button("Forward") { layoutManager?.focusedPane?.goForward() }
-                    .keyboardShortcut("]", modifiers: .command)
+            CommandMenu("前往") {
+                Button("后退", action: goBack)
+                    .keyboardShortcut(.leftArrow, modifiers: .command)
+                Button("前进", action: goForward)
+                    .keyboardShortcut(.rightArrow, modifiers: .command)
                 Button("Enclosing Folder") { layoutManager?.focusedPane?.goUp() }
                     .keyboardShortcut(.upArrow, modifiers: .command)
                 Divider()
@@ -200,7 +207,44 @@ struct MultiFinderApp: App {
         }
     }
 
+    private func cut() {
+        guard !TextEditingCommandRouter.perform(#selector(NSText.cut(_:))) else { return }
+        guard let urls = layoutManager?.focusedPane?.selectedItemURLs, !urls.isEmpty else { return }
+        clipboard.cut(urls: urls)
+    }
+
+    private func undo() {
+        guard !TextEditingCommandRouter.performUndo() else { return }
+        operationService.undo()
+    }
+
+    private func redo() {
+        guard !TextEditingCommandRouter.performRedo() else { return }
+        operationService.redo()
+    }
+
+    private func goBack() {
+        guard !TextEditingCommandRouter.perform(
+            #selector(NSStandardKeyBindingResponding.moveToBeginningOfLine(_:))
+        ) else { return }
+        layoutManager?.focusedPane?.goBack()
+    }
+
+    private func goForward() {
+        guard !TextEditingCommandRouter.perform(
+            #selector(NSStandardKeyBindingResponding.moveToEndOfLine(_:))
+        ) else { return }
+        layoutManager?.focusedPane?.goForward()
+    }
+
+    private func copy() {
+        guard !TextEditingCommandRouter.perform(#selector(NSText.copy(_:))) else { return }
+        guard let urls = layoutManager?.focusedPane?.selectedItemURLs, !urls.isEmpty else { return }
+        clipboard.copy(urls: urls)
+    }
+
     private func paste() {
+        guard !TextEditingCommandRouter.perform(#selector(NSText.paste(_:))) else { return }
         guard let pane = layoutManager?.focusedPane,
               let payload = clipboard.payload else { return }
         if payload.isCut {
@@ -210,6 +254,11 @@ struct MultiFinderApp: App {
         } else {
             pane.copyItems(from: payload.urls)
         }
+    }
+
+    private func selectAll() {
+        guard !TextEditingCommandRouter.perform(#selector(NSText.selectAll(_:))) else { return }
+        layoutManager?.focusedPane?.selectAll()
     }
 
     private func consumeMovedItems(from payload: FileClipboardPayload, result: FileOperationResult) {
@@ -222,5 +271,34 @@ struct MultiFinderApp: App {
     private var toggleFavoriteTitle: String {
         guard let url = layoutManager?.focusedPane?.currentURL else { return "Add to Favorites" }
         return favoritesStore.contains(url) ? "Remove from Favorites" : "Add to Favorites"
+    }
+}
+
+@MainActor
+enum TextEditingCommandRouter {
+    @discardableResult
+    static func perform(_ action: Selector) -> Bool {
+        guard let responder = NSApp.keyWindow?.firstResponder,
+              isTextEditingResponder(responder) else { return false }
+        NSApp.sendAction(action, to: responder, from: nil)
+        return true
+    }
+
+    static func isTextEditingResponder(_ responder: NSResponder?) -> Bool {
+        responder is NSTextView || responder is NSTextField
+    }
+
+    static func performUndo() -> Bool {
+        guard let responder = NSApp.keyWindow?.firstResponder,
+              isTextEditingResponder(responder) else { return false }
+        responder.undoManager?.undo()
+        return true
+    }
+
+    static func performRedo() -> Bool {
+        guard let responder = NSApp.keyWindow?.firstResponder,
+              isTextEditingResponder(responder) else { return false }
+        responder.undoManager?.redo()
+        return true
     }
 }

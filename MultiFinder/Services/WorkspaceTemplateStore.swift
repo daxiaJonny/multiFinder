@@ -60,10 +60,8 @@ final class WorkspaceTemplateStore: ObservableObject {
 
     @discardableResult
     func save(name: String, layoutState: LayoutState) -> WorkspaceTemplate? {
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedName.isEmpty, LayoutManager.isUsable(layoutState) else { return nil }
-
-        let normalizedName = String(trimmedName.prefix(80))
+        guard let normalizedName = Self.normalizedName(name),
+              LayoutManager.isUsable(layoutState) else { return nil }
         if let index = templates.firstIndex(where: {
             $0.name.localizedCaseInsensitiveCompare(normalizedName) == .orderedSame
         }) {
@@ -84,6 +82,41 @@ final class WorkspaceTemplateStore: ObservableObject {
     }
 
     @discardableResult
+    func create(name: String, layoutState: LayoutState) -> WorkspaceTemplate? {
+        guard let normalizedName = Self.normalizedName(name),
+              LayoutManager.isUsable(layoutState),
+              !contains(name: normalizedName) else { return nil }
+
+        let template = WorkspaceTemplate(name: normalizedName, layoutState: layoutState)
+        templates.append(template)
+        persist()
+        return template
+    }
+
+    @discardableResult
+    func update(id: WorkspaceTemplate.ID, layoutState: LayoutState) -> WorkspaceTemplate? {
+        guard LayoutManager.isUsable(layoutState),
+              let index = templates.firstIndex(where: { $0.id == id }) else { return nil }
+
+        let existing = templates[index]
+        let template = WorkspaceTemplate(
+            id: existing.id,
+            name: existing.name,
+            layoutState: layoutState
+        )
+        templates[index] = template
+        persist()
+        return template
+    }
+
+    func contains(name: String) -> Bool {
+        guard let normalizedName = Self.normalizedName(name) else { return false }
+        return templates.contains {
+            $0.name.localizedCaseInsensitiveCompare(normalizedName) == .orderedSame
+        }
+    }
+
+    @discardableResult
     func remove(id: WorkspaceTemplate.ID) -> Bool {
         guard let index = templates.firstIndex(where: { $0.id == id }) else { return false }
         templates.remove(at: index)
@@ -94,6 +127,12 @@ final class WorkspaceTemplateStore: ObservableObject {
     private func persist() {
         guard let data = try? JSONEncoder().encode(templates) else { return }
         userDefaults.set(data, forKey: storageKey)
+    }
+
+    private nonisolated static func normalizedName(_ name: String) -> String? {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return nil }
+        return String(trimmedName.prefix(80))
     }
 
     private nonisolated static func sanitized(_ templates: [WorkspaceTemplate]) -> [WorkspaceTemplate] {

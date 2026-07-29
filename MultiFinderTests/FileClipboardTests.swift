@@ -4,6 +4,14 @@ import XCTest
 
 @MainActor
 final class FileClipboardTests: XCTestCase {
+    @MainActor
+    func testTextEditingCommandRouterRecognizesTextRespondersOnly() {
+        XCTAssertTrue(TextEditingCommandRouter.isTextEditingResponder(NSTextView()))
+        XCTAssertTrue(TextEditingCommandRouter.isTextEditingResponder(NSTextField()))
+        XCTAssertFalse(TextEditingCommandRouter.isTextEditingResponder(NSView()))
+        XCTAssertFalse(TextEditingCommandRouter.isTextEditingResponder(nil))
+    }
+
     private var pasteboard: NSPasteboard!
     private var clipboard: FileClipboard!
     private var temporaryDirectory: URL!

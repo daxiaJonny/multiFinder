@@ -307,11 +307,17 @@ private struct FolderRowDropDelegate: DropDelegate {
     }
 
     private var currentOperation: FileDropOperation {
+        FileDropModifierKeys.currentOperation
+    }
+}
+
+enum FileDropModifierKeys {
+    static var currentOperation: FileDropOperation {
         NSEvent.modifierFlags.contains(.option) ? .copy : .move
     }
 }
 
-private enum DroppedFileURLLoader {
+enum DroppedFileURLLoader {
     static func load(_ providers: [NSItemProvider], completion: @escaping ([URL]) -> Void) {
         let collector = DroppedFileURLCollector()
         let group = DispatchGroup()
@@ -331,7 +337,7 @@ private enum DroppedFileURLLoader {
         }
     }
 
-    private static func fileURL(from item: NSSecureCoding?) -> URL? {
+    static func fileURL(from item: Any?) -> URL? {
         if let url = item as? URL {
             return url
         }

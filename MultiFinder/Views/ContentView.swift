@@ -2,9 +2,13 @@ import SwiftUI
 
 struct WorkspaceSceneRoot: View {
     @SceneStorage("MultiFinder.workspaceState") private var workspaceState = ""
+    @SceneStorage("MultiFinder.activeWorkspaceTemplateID") private var activeTemplateID = ""
 
     var body: some View {
-        ContentView(serializedState: workspaceState) { newState in
+        ContentView(
+            serializedState: workspaceState,
+            activeTemplateID: $activeTemplateID
+        ) { newState in
             workspaceState = newState
         }
     }
@@ -13,17 +17,27 @@ struct WorkspaceSceneRoot: View {
 struct ContentView: View {
     @StateObject private var layoutManager: LayoutManager
     @Environment(\.scenePhase) private var scenePhase
+    @Binding private var activeTemplateID: String
     private let onPersist: (String) -> Void
 
-    init(serializedState: String = "", onPersist: @escaping (String) -> Void = { _ in }) {
+    init(
+        serializedState: String = "",
+        activeTemplateID: Binding<String> = .constant(""),
+        onPersist: @escaping (String) -> Void = { _ in }
+    ) {
         _layoutManager = StateObject(wrappedValue: LayoutManager(serializedState: serializedState))
+        _activeTemplateID = activeTemplateID
         self.onPersist = onPersist
     }
 
     var body: some View {
         Group {
             if let focusedPane = layoutManager.focusedPane {
-                WorkspaceSurface(layoutManager: layoutManager, focusedPane: focusedPane)
+                WorkspaceSurface(
+                    layoutManager: layoutManager,
+                    focusedPane: focusedPane,
+                    activeTemplateID: $activeTemplateID
+                )
             }
         }
         .frame(minWidth: 600, idealWidth: 1100, minHeight: 400, idealHeight: 700)
@@ -54,6 +68,7 @@ private struct WorkspaceSurface: View {
     @ObservedObject var focusedPane: FileBrowserViewModel
     @ObservedObject private var operationService = FileOperationService.shared
     @ObservedObject private var templateStore = WorkspaceTemplateStore.shared
+    @Binding var activeTemplateID: String
     @State private var isNamingTemplate = false
     @State private var templateName = ""
     @State private var templatePendingDeletion: WorkspaceTemplate?
@@ -65,27 +80,43 @@ private struct WorkspaceSurface: View {
             BrowserToolbar(
                 layoutManager: layoutManager,
                 pane: focusedPane,
-                onSaveTemplate: beginSavingTemplate,
+                activeTemplateID: currentTemplateID,
+                onSaveTemplate: saveCurrentTemplate,
+                onSaveTemplateAs: beginSavingTemplateAs,
+                onApplyTemplate: applyTemplate,
                 onDeleteTemplate: { templatePendingDeletion = $0 }
             )
         }
-        .alert("Save Workspace Template", isPresented: $isNamingTemplate) {
-            TextField("Template Name", text: $templateName)
-            Button("Cancel", role: .cancel) {}
-            Button("Save", action: saveTemplate)
-                .disabled(templateName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .focusedValue(
+            \.workspaceTemplateActions,
+            WorkspaceTemplateActions(save: saveCurrentTemplate, saveAs: beginSavingTemplateAs)
+        )
+        .alert("另存工作区模板", isPresented: $isNamingTemplate) {
+            TextField("模板名称", text: $templateName)
+            Button("取消", role: .cancel) {}
+            Button("另存为", action: saveTemplateAs)
+                .disabled(templateNameIsEmpty || templateNameAlreadyExists)
+        } message: {
+            if templateNameAlreadyExists {
+                Text("已存在同名模板，请使用其他名称。")
+            } else {
+                Text("将当前工作区创建为新模板，原模板不会被覆盖。")
+            }
         }
         .confirmationDialog(
-            "Delete Workspace Template?",
+            "删除工作区模板？",
             isPresented: deleteTemplatePresented,
             titleVisibility: .visible,
             presenting: templatePendingDeletion
         ) { template in
-            Button("Delete \(template.name)", role: .destructive) {
+            Button("删除“\(template.name)”", role: .destructive) {
                 templateStore.remove(id: template.id)
+                if currentTemplateID == template.id {
+                    activeTemplateID = ""
+                }
                 templatePendingDeletion = nil
             }
-            Button("Cancel", role: .cancel) {
+            Button("取消", role: .cancel) {
                 templatePendingDeletion = nil
             }
         }
@@ -139,13 +170,64 @@ private struct WorkspaceSurface: View {
         )
     }
 
-    private func beginSavingTemplate() {
-        templateName = "Workspace \(templateStore.templates.count + 1)"
+    private var currentTemplateID: WorkspaceTemplate.ID? {
+        guard let id = UUID(uuidString: activeTemplateID),
+              templateStore.templates.contains(where: { $0.id == id }) else { return nil }
+        return id
+    }
+
+    private var currentTemplate: WorkspaceTemplate? {
+        guard let currentTemplateID else { return nil }
+        return templateStore.templates.first { $0.id == currentTemplateID }
+    }
+
+    private var templateNameIsEmpty: Bool {
+        templateName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var templateNameAlreadyExists: Bool {
+        templateStore.contains(name: templateName)
+    }
+
+    private func saveCurrentTemplate() {
+        guard let currentTemplateID,
+              templateStore.update(
+                id: currentTemplateID,
+                layoutState: layoutManager.makeTemplateState()
+              ) != nil else {
+            beginSavingTemplateAs()
+            return
+        }
+    }
+
+    private func beginSavingTemplateAs() {
+        templateName = availableTemplateName()
         isNamingTemplate = true
     }
 
-    private func saveTemplate() {
-        templateStore.save(name: templateName, layoutState: layoutManager.makeTemplateState())
+    private func saveTemplateAs() {
+        guard let template = templateStore.create(
+            name: templateName,
+            layoutState: layoutManager.makeTemplateState()
+        ) else { return }
+        activeTemplateID = template.id.uuidString
+    }
+
+    private func applyTemplate(_ template: WorkspaceTemplate) {
+        guard layoutManager.applyTemplate(template.layoutState) else { return }
+        activeTemplateID = template.id.uuidString
+    }
+
+    private func availableTemplateName() -> String {
+        let baseName = currentTemplate.map { "\($0.name) 副本" }
+            ?? "工作区 \(templateStore.templates.count + 1)"
+        guard templateStore.contains(name: baseName) else { return baseName }
+
+        var suffix = 2
+        while templateStore.contains(name: "\(baseName) \(suffix)") {
+            suffix += 1
+        }
+        return "\(baseName) \(suffix)"
     }
 }
 
@@ -157,7 +239,10 @@ private struct BrowserToolbar: ToolbarContent {
     @ObservedObject private var favoritesStore = FavoritesStore.shared
     @ObservedObject private var templateStore = WorkspaceTemplateStore.shared
     private let iTermService = ITermService.shared
+    let activeTemplateID: WorkspaceTemplate.ID?
     let onSaveTemplate: () -> Void
+    let onSaveTemplateAs: () -> Void
+    let onApplyTemplate: (WorkspaceTemplate) -> Void
     let onDeleteTemplate: (WorkspaceTemplate) -> Void
 
     var body: some ToolbarContent {
@@ -253,20 +338,27 @@ private struct BrowserToolbar: ToolbarContent {
             .help("Operation History")
 
             Menu {
-                Button("Save Current Workspace…", action: onSaveTemplate)
+                Button(saveTemplateTitle, action: onSaveTemplate)
+                Button("另存为…", action: onSaveTemplateAs)
 
                 if templateStore.templates.isEmpty {
                     Divider()
-                    Text("No Saved Templates")
+                    Text("暂无已保存模板")
                 } else {
                     Divider()
                     ForEach(templateStore.templates) { template in
-                        Button(template.name) {
-                            layoutManager.applyTemplate(template.layoutState)
+                        Button {
+                            onApplyTemplate(template)
+                        } label: {
+                            if template.id == activeTemplateID {
+                                Label(template.name, systemImage: "checkmark")
+                            } else {
+                                Text(template.name)
+                            }
                         }
                     }
                     Divider()
-                    Menu("Delete Template") {
+                    Menu("删除模板") {
                         ForEach(templateStore.templates) { template in
                             Button(template.name, role: .destructive) {
                                 onDeleteTemplate(template)
@@ -277,7 +369,7 @@ private struct BrowserToolbar: ToolbarContent {
             } label: {
                 Image(systemName: "square.grid.2x2")
             }
-            .help("Workspace Templates")
+            .help("工作区模板")
 
             Menu {
                 Button {
@@ -382,5 +474,29 @@ private struct BrowserToolbar: ToolbarContent {
         } catch {
             pane.errorMessage = error.localizedDescription
         }
+    }
+
+    private var saveTemplateTitle: String {
+        guard let activeTemplateID,
+              let template = templateStore.templates.first(where: { $0.id == activeTemplateID }) else {
+            return "保存…"
+        }
+        return "保存到“\(template.name)”"
+    }
+}
+
+struct WorkspaceTemplateActions {
+    let save: () -> Void
+    let saveAs: () -> Void
+}
+
+private struct WorkspaceTemplateActionsKey: FocusedValueKey {
+    typealias Value = WorkspaceTemplateActions
+}
+
+extension FocusedValues {
+    var workspaceTemplateActions: WorkspaceTemplateActions? {
+        get { self[WorkspaceTemplateActionsKey.self] }
+        set { self[WorkspaceTemplateActionsKey.self] = newValue }
     }
 }

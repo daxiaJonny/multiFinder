@@ -107,4 +107,15 @@ final class FileItemTests: XCTestCase {
     func testFileDropSafetyDoesNotTreatOrdinaryNestedSystemFoldersAsRoots() {
         XCTAssertFalse(FileDropSafety.isProtectedSource(URL(fileURLWithPath: "/tmp/project")))
     }
+
+    func testDroppedFileURLLoaderAcceptsURLAndDataRepresentations() throws {
+        let url = URL(fileURLWithPath: "/tmp/report.txt")
+
+        XCTAssertEqual(DroppedFileURLLoader.fileURL(from: url), url)
+        XCTAssertEqual(
+            DroppedFileURLLoader.fileURL(from: url.dataRepresentation),
+            url
+        )
+        XCTAssertNil(DroppedFileURLLoader.fileURL(from: "not a file URL"))
+    }
 }
