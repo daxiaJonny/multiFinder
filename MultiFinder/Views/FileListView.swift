@@ -1,4 +1,5 @@
 import AppKit
+import CoreTransferable
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -59,10 +60,10 @@ struct FileListView: View {
                             guard FileDropSafety.canStartDragging(item) else { return nil }
                             return NSItemProvider(contentsOf: item.url)
                         }
-                        .dropDestination(for: URL.self) { urls in
+                        .dropDestination(for: DroppedFileURL.self) { items in
                             onFocus()
                             viewModel.transferDroppedItems(
-                                urls,
+                                items.map(\.url),
                                 into: item.url,
                                 operation: FileDropModifierKeys.currentOperation
                             )
@@ -249,6 +250,19 @@ struct FileListView: View {
 enum FileDropModifierKeys {
     static var currentOperation: FileDropOperation {
         NSEvent.modifierFlags.contains(.option) ? .copy : .move
+    }
+}
+
+struct DroppedFileURL: Transferable, Equatable, Sendable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        DataRepresentation(importedContentType: .fileURL) { data in
+            guard let url = URL(dataRepresentation: data, relativeTo: nil), url.isFileURL else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            return DroppedFileURL(url: url)
+        }
     }
 }
 
