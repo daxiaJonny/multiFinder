@@ -1,5 +1,6 @@
 import CoreTransferable
 import Foundation
+import UniformTypeIdentifiers
 import XCTest
 @testable import MultiFinder
 
@@ -124,6 +125,24 @@ final class FileItemTests: XCTestCase {
         let file = temporaryDirectory.appendingPathComponent("dragged.log")
         try Data("log".utf8).write(to: file)
         let provider = try XCTUnwrap(NSItemProvider(contentsOf: file))
+
+        let dropped: DroppedFileURL = try await withCheckedThrowingContinuation { continuation in
+            _ = provider.loadTransferable(type: DroppedFileURL.self) { result in
+                continuation.resume(with: result)
+            }
+        }
+
+        XCTAssertEqual(dropped.url.standardizedFileURL, file.standardizedFileURL)
+    }
+
+    func testDroppedFileURLNativeProviderRoundTrip() async throws {
+        let file = temporaryDirectory.appendingPathComponent("native-drag.log")
+        try Data("log".utf8).write(to: file)
+        let provider = NSItemProvider()
+        provider.register(DroppedFileURL(url: file))
+
+        XCTAssertTrue(provider.registeredTypeIdentifiers.contains("com.multifinder.dragged-file-url"))
+        XCTAssertTrue(provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier))
 
         let dropped: DroppedFileURL = try await withCheckedThrowingContinuation { continuation in
             _ = provider.loadTransferable(type: DroppedFileURL.self) { result in

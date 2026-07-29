@@ -55,25 +55,21 @@ struct FileListView: View {
             ForEach(viewModel.items) { item in
                 // Table drop targets must be attached to TableRowContent, not hosted cell views.
                 if item.isDirectory && !item.isPackage {
-                    TableRow(item)
-                        .itemProvider {
-                            guard FileDropSafety.canStartDragging(item) else { return nil }
-                            return NSItemProvider(contentsOf: item.url)
-                        }
-                        .dropDestination(for: DroppedFileURL.self) { items in
-                            onFocus()
-                            viewModel.transferDroppedItems(
-                                items.map(\.url),
-                                into: item.url,
-                                operation: FileDropModifierKeys.currentOperation
-                            )
-                        }
+                    if FileDropSafety.canStartDragging(item) {
+                        TableRow(item)
+                            .draggable(DroppedFileURL(url: item.url))
+                            .dropDestination(for: DroppedFileURL.self) { items in
+                                transferDroppedItems(items, into: item.url)
+                            }
+                    } else {
+                        TableRow(item)
+                            .dropDestination(for: DroppedFileURL.self) { items in
+                                transferDroppedItems(items, into: item.url)
+                            }
+                    }
                 } else {
                     TableRow(item)
-                        .itemProvider {
-                            guard FileDropSafety.canStartDragging(item) else { return nil }
-                            return NSItemProvider(contentsOf: item.url)
-                        }
+                        .draggable(DroppedFileURL(url: item.url))
                 }
             }
         }
@@ -207,6 +203,15 @@ struct FileListView: View {
         }
     }
 
+    private func transferDroppedItems(_ items: [DroppedFileURL], into destination: URL) {
+        onFocus()
+        viewModel.transferDroppedItems(
+            items.map(\.url),
+            into: destination,
+            operation: FileDropModifierKeys.currentOperation
+        )
+    }
+
     private func pasteFromClipboard() {
         onFocus()
         guard let payload = clipboard.payload else { return }
@@ -257,13 +262,31 @@ struct DroppedFileURL: Transferable, Equatable, Sendable {
     let url: URL
 
     static var transferRepresentation: some TransferRepresentation {
-        DataRepresentation(importedContentType: .fileURL) { data in
-            guard let url = URL(dataRepresentation: data, relativeTo: nil), url.isFileURL else {
-                throw CocoaError(.fileReadCorruptFile)
-            }
-            return DroppedFileURL(url: url)
-        }
+        DataRepresentation(
+            contentType: .multiFinderFileURL,
+            exporting: { $0.url.dataRepresentation },
+            importing: { data in try decode(data) }
+        )
+        DataRepresentation(
+            contentType: .fileURL,
+            exporting: { $0.url.dataRepresentation },
+            importing: { data in try decode(data) }
+        )
     }
+
+    private static func decode(_ data: Data) throws -> DroppedFileURL {
+        guard let url = URL(dataRepresentation: data, relativeTo: nil), url.isFileURL else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        return DroppedFileURL(url: url)
+    }
+}
+
+private extension UTType {
+    static let multiFinderFileURL = UTType(
+        exportedAs: "com.multifinder.dragged-file-url",
+        conformingTo: .data
+    )
 }
 
 enum DroppedFileURLLoader {
