@@ -8,8 +8,6 @@ struct FileBrowserPane: View {
     let isHighlighted: Bool
     let onFocus: () -> Void
 
-    @State private var isDropTargeted = false
-
     var body: some View {
         VStack(spacing: 0) {
             if pane.tabs.count > 1 {
@@ -39,14 +37,6 @@ struct FileBrowserPane: View {
                 )
         )
         .animation(.easeInOut(duration: 0.2), value: isHighlighted)
-        .onDrop(
-            of: [UTType.fileURL],
-            delegate: PaneDropDelegate(
-                viewModel: pane.selectedTab,
-                isTargeted: $isDropTargeted,
-                onFocus: onFocus
-            )
-        )
         .contextMenu {
             paneContextMenu
         }
@@ -96,57 +86,12 @@ struct FileBrowserPane: View {
     // MARK: - Helpers
 
     private var paneBorderColor: Color {
-        if isDropTargeted || isHighlighted { return .accentColor }
+        if isHighlighted { return .accentColor }
         return isFocused ? Color.accentColor.opacity(0.4) : Color(nsColor: .separatorColor)
     }
 
     private var paneBorderWidth: Double {
-        isDropTargeted || isHighlighted ? 3 : (isFocused ? 1.5 : 0.5)
-    }
-
-}
-
-private struct PaneDropDelegate: DropDelegate {
-    let viewModel: FileBrowserViewModel
-    @Binding var isTargeted: Bool
-    let onFocus: () -> Void
-
-    func validateDrop(info: DropInfo) -> Bool {
-        viewModel.canCreateItems && info.hasItemsConforming(to: [.fileURL])
-    }
-
-    func dropEntered(info: DropInfo) {
-        isTargeted = validateDrop(info: info)
-    }
-
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        guard validateDrop(info: info) else {
-            return DropProposal(operation: .forbidden)
-        }
-        return DropProposal(operation: currentOperation == .copy ? .copy : .move)
-    }
-
-    func dropExited(info: DropInfo) {
-        isTargeted = false
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        guard validateDrop(info: info),
-              let destination = viewModel.currentURL else { return false }
-        let providers = info.itemProviders(for: [.fileURL])
-        guard !providers.isEmpty else { return false }
-        let operation = currentOperation
-        isTargeted = false
-        onFocus()
-
-        DroppedFileURLLoader.load(providers) { urls in
-            viewModel.transferDroppedItems(urls, into: destination, operation: operation)
-        }
-        return true
-    }
-
-    private var currentOperation: FileDropOperation {
-        FileDropModifierKeys.currentOperation
+        isHighlighted ? 3 : (isFocused ? 1.5 : 0.5)
     }
 }
 
@@ -237,6 +182,7 @@ private struct PaneTabContent: View {
     let onFocus: () -> Void
 
     @State private var renameTarget: FileItem?
+    @State private var isCurrentDirectoryDropTargeted = false
     @ObservedObject private var operationService = FileOperationService.shared
 
     var body: some View {
@@ -343,7 +289,20 @@ private struct PaneTabContent: View {
         .foregroundColor(.secondary)
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .contentShape(Rectangle())
+        .background(
+            isCurrentDirectoryDropTargeted
+                ? Color.accentColor.opacity(0.18)
+                : Color(nsColor: .underPageBackgroundColor)
+        )
+        .onDrop(
+            of: [UTType.fileURL],
+            delegate: CurrentDirectoryDropDelegate(
+                viewModel: viewModel,
+                isTargeted: $isCurrentDirectoryDropTargeted,
+                onFocus: onFocus
+            )
+        )
     }
 
     // MARK: - Helpers
@@ -360,5 +319,49 @@ private struct PaneTabContent: View {
             get: { viewModel.errorMessage != nil },
             set: { if !$0 { viewModel.errorMessage = nil } }
         )
+    }
+}
+
+private struct CurrentDirectoryDropDelegate: DropDelegate {
+    let viewModel: FileBrowserViewModel
+    @Binding var isTargeted: Bool
+    let onFocus: () -> Void
+
+    func validateDrop(info: DropInfo) -> Bool {
+        viewModel.canCreateItems && info.hasItemsConforming(to: [.fileURL])
+    }
+
+    func dropEntered(info: DropInfo) {
+        isTargeted = validateDrop(info: info)
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        guard validateDrop(info: info) else {
+            return DropProposal(operation: .forbidden)
+        }
+        return DropProposal(operation: currentOperation == .copy ? .copy : .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        isTargeted = false
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard validateDrop(info: info),
+              let destination = viewModel.currentURL else { return false }
+        let providers = info.itemProviders(for: [.fileURL])
+        guard !providers.isEmpty else { return false }
+        let operation = currentOperation
+        isTargeted = false
+        onFocus()
+
+        DroppedFileURLLoader.load(providers) { urls in
+            viewModel.transferDroppedItems(urls, into: destination, operation: operation)
+        }
+        return true
+    }
+
+    private var currentOperation: FileDropOperation {
+        FileDropModifierKeys.currentOperation
     }
 }
