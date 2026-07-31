@@ -79,6 +79,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     }
 
     private let operationService: FileOperationService
+    private let fileOpeningService: FileOpeningService
     private let aiPlanner: any AIPlanner
     private let aiQuestionAnswerer: any AIQuestionAnswering
     let isAIAssistantAvailable: Bool
@@ -98,6 +99,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         backHistory: [BrowserLocation] = [],
         forwardHistory: [BrowserLocation] = [],
         operationService: FileOperationService = .shared,
+        fileOpeningService: FileOpeningService = .shared,
         aiPlanner: any AIPlanner = CursorCLIPlanner.shared,
         aiQuestionAnswerer: any AIQuestionAnswering = CursorCLIPlanner.shared,
         aiPlannerAvailable: Bool = CursorCLIPlanner.shared.isAvailable
@@ -108,6 +110,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         self.backHistory = backHistory.map(Self.normalized)
         self.forwardHistory = forwardHistory.map(Self.normalized)
         self.operationService = operationService
+        self.fileOpeningService = fileOpeningService
         self.aiPlanner = aiPlanner
         self.aiQuestionAnswerer = aiQuestionAnswerer
         self.isAIAssistantAvailable = aiPlannerAvailable
@@ -428,8 +431,29 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     func openItem(_ item: FileItem) {
         if Self.shouldNavigateInto(item) {
             navigate(to: .directory(item.url))
+        } else if let applicationURL = fileOpeningService.preferredTextEditorURL(for: item.url) {
+            openItems([item.url], withApplicationAt: applicationURL)
         } else {
-            NSWorkspace.shared.open(item.url)
+            guard NSWorkspace.shared.open(item.url) else {
+                errorMessage = "无法打开“\(item.name)”。"
+                return
+            }
+        }
+    }
+
+    func openItems(_ urls: [URL], withApplicationAt applicationURL: URL) {
+        guard !urls.isEmpty else { return }
+        let configuration = NSWorkspace.OpenConfiguration()
+        NSWorkspace.shared.open(
+            urls,
+            withApplicationAt: applicationURL,
+            configuration: configuration
+        ) { [weak self] _, error in
+            guard let error else { return }
+            Task { @MainActor [weak self] in
+                let applicationName = applicationURL.deletingPathExtension().lastPathComponent
+                self?.errorMessage = "无法使用“\(applicationName)”打开文件：\(error.localizedDescription)"
+            }
         }
     }
 
