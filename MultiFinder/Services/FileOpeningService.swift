@@ -19,6 +19,11 @@ final class FileOpeningService {
         "com.sublimetext.3"
     ]
 
+    nonisolated static let visualStudioCodeBundleIdentifiers = [
+        "com.microsoft.VSCode",
+        "com.microsoft.VSCodeInsiders"
+    ]
+
     private nonisolated static let textExtensions: Set<String> = [
         "bash", "c", "cc", "cfg", "conf", "config", "cpp", "css", "csv",
         "cxx", "dart", "env", "fish", "go", "graphql", "h", "hpp", "htm",
@@ -35,9 +40,14 @@ final class FileOpeningService {
     ]
 
     private let workspace: NSWorkspace
+    private let settings: AppSettings
 
-    init(workspace: NSWorkspace = .shared) {
+    init(
+        workspace: NSWorkspace = .shared,
+        settings: AppSettings? = nil
+    ) {
         self.workspace = workspace
+        self.settings = settings ?? .shared
     }
 
     nonisolated static func prefersSublimeText(for url: URL) -> Bool {
@@ -57,7 +67,7 @@ final class FileOpeningService {
 
     func preferredTextEditorURL(for url: URL) -> URL? {
         guard Self.prefersSublimeText(for: url) else { return nil }
-        return sublimeTextApplicationURL
+        return configuredTextEditorURL
     }
 
     func applications(for urls: [URL]) -> [FileOpenApplication] {
@@ -97,24 +107,70 @@ final class FileOpeningService {
     }
 
     private var sublimeTextApplicationURL: URL? {
-        for bundleIdentifier in Self.sublimeTextBundleIdentifiers {
+        installedApplicationURL(
+            bundleIdentifiers: Self.sublimeTextBundleIdentifiers,
+            knownLocations: [
+                URL(fileURLWithPath: "/Applications/Sublime Text.app"),
+                FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Applications/Sublime Text.app")
+            ]
+        )
+    }
+
+    private var visualStudioCodeApplicationURL: URL? {
+        installedApplicationURL(
+            bundleIdentifiers: Self.visualStudioCodeBundleIdentifiers,
+            knownLocations: [
+                URL(fileURLWithPath: "/Applications/Visual Studio Code.app"),
+                FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Applications/Visual Studio Code.app"),
+                URL(fileURLWithPath: "/Applications/Visual Studio Code - Insiders.app")
+            ]
+        )
+    }
+
+    private var customEditorApplicationURL: URL? {
+        let path = settings.customEditorApplicationPath
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty else { return nil }
+
+        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+            .standardizedFileURL
+        guard url.pathExtension.localizedCaseInsensitiveCompare("app") == .orderedSame,
+              FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return url
+    }
+
+    private var configuredTextEditorURL: URL? {
+        switch settings.preferredEditorApplication {
+        case .automatic, .sublimeText:
+            return sublimeTextApplicationURL
+        case .systemDefault:
+            return nil
+        case .visualStudioCode:
+            return visualStudioCodeApplicationURL
+        case .custom:
+            return customEditorApplicationURL
+        }
+    }
+
+    private func installedApplicationURL(
+        bundleIdentifiers: [String],
+        knownLocations: [URL]
+    ) -> URL? {
+        for bundleIdentifier in bundleIdentifiers {
             if let url = workspace.urlForApplication(withBundleIdentifier: bundleIdentifier) {
                 return url.standardizedFileURL
             }
         }
 
-        let knownLocations = [
-            URL(fileURLWithPath: "/Applications/Sublime Text.app"),
-            FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Applications/Sublime Text.app")
-        ]
         return knownLocations.first { FileManager.default.fileExists(atPath: $0.path) }?
             .standardizedFileURL
     }
 
     private func preferredApplicationURL(for urls: [URL]) -> URL? {
-        if urls.allSatisfy(Self.prefersSublimeText), let sublimeTextApplicationURL {
-            return sublimeTextApplicationURL
+        if urls.allSatisfy(Self.prefersSublimeText), let configuredTextEditorURL {
+            return configuredTextEditorURL
         }
 
         let systemDefaults = urls.compactMap { workspace.urlForApplication(toOpen: $0) }

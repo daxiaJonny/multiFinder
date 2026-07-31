@@ -18,6 +18,7 @@ struct FileBrowserPane: View {
 
             PaneTabContent(
                 viewModel: pane.selectedTab,
+                paneID: pane.id,
                 layoutManager: layoutManager,
                 isFocused: isFocused,
                 onFocus: onFocus
@@ -177,12 +178,14 @@ private struct PaneTabItem: View {
 
 private struct PaneTabContent: View {
     @ObservedObject var viewModel: FileBrowserViewModel
+    let paneID: UUID
     let layoutManager: LayoutManager
     let isFocused: Bool
     let onFocus: () -> Void
 
     @State private var renameTarget: FileItem?
     @State private var isCurrentDirectoryDropTargeted = false
+    @FocusState private var isFilterFieldFocused: Bool
     @ObservedObject private var operationService = FileOperationService.shared
 
     var body: some View {
@@ -216,14 +219,37 @@ private struct PaneTabContent: View {
 
             Divider()
 
+            filterBar
+
+            Divider()
+
             FileListView(
                 viewModel: viewModel,
+                canTransferToAdjacentPane: { urls, operation in
+                    layoutManager.canTransferItemsToAdjacentPane(
+                        urls,
+                        from: paneID,
+                        operation: operation
+                    )
+                },
                 onFocus: onFocus,
+                onBeginFiltering: {
+                    onFocus()
+                    isFilterFieldFocused = true
+                },
                 onQuickLook: {
                     QuickLookManager.shared.preview(urls: viewModel.selectedItemURLs)
                 },
                 onRename: { item in
                     renameTarget = item
+                },
+                onCopyToAdjacentPane: { urls in
+                    onFocus()
+                    layoutManager.transferItemsToAdjacentPane(urls, from: paneID, operation: .copy)
+                },
+                onMoveToAdjacentPane: { urls in
+                    onFocus()
+                    layoutManager.transferItemsToAdjacentPane(urls, from: paneID, operation: .move)
                 }
             )
             .simultaneousGesture(TapGesture().onEnded { _ in onFocus() })
@@ -264,12 +290,50 @@ private struct PaneTabContent: View {
 
     // MARK: - Status Bar
 
+    private var filterBar: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "line.3.horizontal.decrease")
+                .foregroundStyle(.secondary)
+
+            TextField("Filter by file name", text: $viewModel.filterText)
+                .textFieldStyle(.plain)
+                .focused($isFilterFieldFocused)
+                .onSubmit {
+                    isFilterFieldFocused = false
+                }
+                .onKeyPress(.escape) {
+                    viewModel.clearFilter()
+                    isFilterFieldFocused = false
+                    return .handled
+                }
+
+            if viewModel.isFiltering {
+                Button {
+                    viewModel.clearFilter()
+                    isFilterFieldFocused = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear Filter")
+            }
+        }
+        .font(.system(size: 11))
+        .padding(.horizontal, 9)
+        .frame(height: 27)
+        .background(Color(nsColor: .underPageBackgroundColor))
+        .onChange(of: isFilterFieldFocused) { _, focused in
+            if focused { onFocus() }
+        }
+    }
+
     private var statusBar: some View {
         HStack {
-            Text("\(viewModel.items.count) item\(viewModel.items.count == 1 ? "" : "s")")
+            Text(itemCountText)
             Spacer()
             if !viewModel.selectedItems.isEmpty {
-                Text("\(viewModel.selectedItems.count) selected")
+                Text(L10n.format("%lld selected", Int64(viewModel.selectedItems.count)))
             }
             if viewModel.isLoading {
                 ProgressView()
@@ -312,6 +376,19 @@ private struct PaneTabContent: View {
             get: { viewModel.batchRenameItems != nil },
             set: { if !$0 { viewModel.batchRenameItems = nil } }
         )
+    }
+
+    private var itemCountText: String {
+        if viewModel.isFiltering {
+            return L10n.format(
+                "Showing %lld of %lld items",
+                Int64(viewModel.visibleItems.count),
+                Int64(viewModel.items.count)
+            )
+        }
+        return viewModel.items.count == 1
+            ? L10n.string("1 item")
+            : L10n.format("%lld items", Int64(viewModel.items.count))
     }
 
     private var showErrorBinding: Binding<Bool> {

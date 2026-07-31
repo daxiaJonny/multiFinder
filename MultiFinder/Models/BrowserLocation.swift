@@ -26,11 +26,13 @@ enum BrowserLocation: Hashable, Codable, Sendable {
         case .directory(let url):
             return url.path == "/" ? url.path : url.lastPathComponent
         case .recents:
-            return "Recents"
+            return L10n.string("Recents")
         case .search(let query):
-            return query.text.isEmpty ? "Search" : "Search: \(query.text)"
+            return query.text.isEmpty
+                ? L10n.string("Search")
+                : L10n.format("Search: %@", query.text)
         case .aiSearch(_, _, let title):
-            return title.isEmpty ? "AI Search" : title
+            return title.isEmpty ? L10n.string("AI Search") : title
         }
     }
 
@@ -39,9 +41,9 @@ enum BrowserLocation: Hashable, Codable, Sendable {
         case .directory(let url):
             return url.path
         case .recents:
-            return "Recents"
+            return L10n.string("Recents")
         case .search(let query):
-            return query.scope?.path ?? "This Mac"
+            return query.scope?.path ?? L10n.string("This Mac")
         case .aiSearch(let root, _, _):
             return root.path
         }

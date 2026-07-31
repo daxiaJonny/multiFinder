@@ -117,7 +117,7 @@ final class CursorCLIPlannerTests: XCTestCase {
             guard case .unparseableOutput(let message) = error else {
                 return XCTFail("Unexpected error: \(error)")
             }
-            XCTAssertTrue(message.contains("空内容"))
+            XCTAssertEqual(message, L10n.string("AI returned an empty response."))
         }
     }
 
@@ -285,5 +285,27 @@ final class CursorCLIPlannerTests: XCTestCase {
         let plain = tempDir.appendingPathComponent("not-executable.txt")
         try "text".write(to: plain, atomically: true, encoding: .utf8)
         XCTAssertFalse(CursorCLIPlanner(executableURL: plain).isAvailable)
+    }
+
+    func testReadsUpdatedExecutablePathWithoutRecreatingPlanner() async throws {
+        let suiteName = "CursorCLIPlannerTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let firstScript = try makeScript("printf 'first editor'")
+        let secondScript = try makeScript("printf 'second editor'")
+        let planner = CursorCLIPlanner(userDefaults: defaults)
+
+        defaults.set(firstScript.path, forKey: CursorCLIPlanner.executablePathDefaultsKey)
+        XCTAssertTrue(planner.isAvailable)
+        let firstAnswer = try await planner.answer(assistantRequest)
+        XCTAssertEqual(firstAnswer, "first editor")
+
+        defaults.set(
+            "  \(secondScript.path)\n",
+            forKey: CursorCLIPlanner.executablePathDefaultsKey
+        )
+        XCTAssertTrue(planner.isAvailable)
+        let secondAnswer = try await planner.answer(assistantRequest)
+        XCTAssertEqual(secondAnswer, "second editor")
     }
 }

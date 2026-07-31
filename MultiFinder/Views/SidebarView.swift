@@ -25,15 +25,28 @@ struct SidebarView: View {
     private var shortcuts: [SidebarItem] {
         let home = FileManager.default.homeDirectoryForCurrentUser
         return [
-            SidebarItem(name: "最近使用", icon: "clock.arrow.circlepath", isRecents: true),
-            SidebarItem(name: "应用程序", icon: "paperplane.fill", url: URL(fileURLWithPath: "/Applications")),
-            SidebarItem(name: "文稿", icon: "doc.fill", url: home.appendingPathComponent("Documents")),
-            SidebarItem(name: "下载", icon: "arrow.down.circle.fill", url: home.appendingPathComponent("Downloads")),
+            SidebarItem(name: L10n.string("Recents"), icon: "clock.arrow.circlepath", isRecents: true),
+            SidebarItem(
+                name: L10n.string("Applications"),
+                icon: "paperplane.fill",
+                url: URL(fileURLWithPath: "/Applications")
+            ),
+            SidebarItem(
+                name: L10n.string("Documents"),
+                icon: "doc.fill",
+                url: home.appendingPathComponent("Documents")
+            ),
+            SidebarItem(
+                name: L10n.string("Downloads"),
+                icon: "arrow.down.circle.fill",
+                url: home.appendingPathComponent("Downloads")
+            ),
         ]
     }
 
     private var locations: [SidebarItem] {
-        let macName = Host.current().localizedName ?? NSUserName() + "的Mac"
+        let macName = Host.current().localizedName
+            ?? L10n.format("%@’s Mac", NSUserName())
         return [
             SidebarItem(name: macName, icon: "laptopcomputer", url: URL(fileURLWithPath: "/")),
         ]
@@ -43,7 +56,7 @@ struct SidebarView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if !favoritesStore.favorites.isEmpty {
-                    sectionHeader("收藏")
+                    sectionHeader(L10n.string("Favorites"))
 
                     ForEach(favoritesStore.favorites) { favorite in
                         favoriteRow(favorite)
@@ -52,7 +65,7 @@ struct SidebarView: View {
                     Spacer().frame(height: 16)
                 }
 
-                sectionHeader("个人收藏")
+                sectionHeader(L10n.string("Personal Favorites"))
 
                 ForEach(shortcuts) { item in
                     sidebarRow(item)
@@ -60,7 +73,7 @@ struct SidebarView: View {
 
                 Spacer().frame(height: 16)
 
-                sectionHeader("位置")
+                sectionHeader(L10n.string("Locations"))
 
                 ForEach(locations) { item in
                     sidebarRow(item)

@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v5
+
+      - name: Verify Xcode
+        run: xcodebuild -version
+
+      - name: Run tests
+        run: |
+          xcodebuild \
+            -project MultiFinder.xcodeproj \
+            -scheme MultiFinder \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            test
+
+      - name: Verify tag matches app version
+        run: |
+          set -euo pipefail
+          app_version="$(
+            xcodebuild \
+              -project MultiFinder.xcodeproj \
+              -scheme MultiFinder \
+              -configuration Release \
+              -showBuildSettings \
+            | awk '/ MARKETING_VERSION = / { print $3; exit }'
+          )"
+          test -n "$app_version"
+          test "$GITHUB_REF_NAME" = "v$app_version"
+
+      - name: Build and verify Universal release
+        run: scripts/build-adhoc-release.sh
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          case "$GITHUB_REF_NAME" in
+            v*) ;;
+            *) echo "error: release workflow requires a v* tag" >&2; exit 1 ;;
+          esac
+
+          release_title="MultiFinder $GITHUB_REF_NAME"
+          notes_file="docs/UNNOTARIZED_RELEASE.md"
+          release_assets=(
+            build/release/MultiFinder.zip
+            build/release/MultiFinder.zip.sha256
+          )
+
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${release_assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+            gh release edit "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$release_title" \
+              --notes-file "$notes_file"
+          else
+            gh release create "$GITHUB_REF_NAME" "${release_assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "$release_title" \
+              --notes-file "$notes_file"
+          fi

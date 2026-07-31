@@ -22,6 +22,11 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     @Published private(set) var location: BrowserLocation
     @Published private(set) var items: [FileItem] = []
     @Published var selectedItems: Set<FileItem.ID> = []
+    @Published var filterText = "" {
+        didSet {
+            selectedItems.formIntersection(Set(visibleItems.map(\.id)))
+        }
+    }
     @Published var sortOrder: [FileItemComparator] {
         didSet {
             guard let comparator = sortOrder.first else { return }
@@ -78,35 +83,58 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         return items.first { $0.id == id }
     }
 
+    var visibleItems: [FileItem] {
+        let query = filterText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return items }
+        return items.filter { item in
+            item.name.range(
+                of: query,
+                options: [.caseInsensitive, .diacriticInsensitive],
+                locale: .current
+            ) != nil
+        }
+    }
+
+    var isFiltering: Bool {
+        !filterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private let appSettings: AppSettings
     private let operationService: FileOperationService
     private let fileOpeningService: FileOpeningService
     private let aiPlanner: any AIPlanner
     private let aiQuestionAnswerer: any AIQuestionAnswering
-    let isAIAssistantAvailable: Bool
+    @Published private(set) var isAIAssistantAvailable: Bool
     private let directoryMonitor = DirectoryMonitor()
     private var loadTask: Task<Void, Never>?
     private var monitorRefreshTask: Task<Void, Never>?
     private var aiPlanTask: Task<Void, Never>?
     private var aiAnswerTask: Task<Void, Never>?
+    private var aiPlanRequestID: UUID?
+    private var aiAnswerRequestID: UUID?
+    private var settingsCancellable: AnyCancellable?
     private var loadGeneration: UInt64 = 0
-    private var pendingSelectionURL: URL?
+    private var pendingSelectionURLs: Set<URL> = []
 
     init(
         location: BrowserLocation = .directory(FileManager.default.homeDirectoryForCurrentUser),
         sortField: SortField = .name,
         sortAscending: Bool = true,
-        showHiddenFiles: Bool = false,
+        showHiddenFiles: Bool? = nil,
         backHistory: [BrowserLocation] = [],
         forwardHistory: [BrowserLocation] = [],
+        appSettings: AppSettings? = nil,
         operationService: FileOperationService = .shared,
         fileOpeningService: FileOpeningService = .shared,
         aiPlanner: any AIPlanner = CursorCLIPlanner.shared,
         aiQuestionAnswerer: any AIQuestionAnswering = CursorCLIPlanner.shared,
-        aiPlannerAvailable: Bool = CursorCLIPlanner.shared.isAvailable
+        aiPlannerAvailable: Bool? = nil
     ) {
+        let appSettings = appSettings ?? .shared
+        self.appSettings = appSettings
         self.location = Self.normalized(location)
         self.sortOrder = [FileItemComparator(field: sortField, order: sortAscending ? .forward : .reverse)]
-        self.showHiddenFiles = showHiddenFiles
+        self.showHiddenFiles = showHiddenFiles ?? appSettings.showHiddenFilesByDefault
         self.backHistory = backHistory.map(Self.normalized)
         self.forwardHistory = forwardHistory.map(Self.normalized)
         self.operationService = operationService
@@ -114,6 +142,13 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         self.aiPlanner = aiPlanner
         self.aiQuestionAnswerer = aiQuestionAnswerer
         self.isAIAssistantAvailable = aiPlannerAvailable
+            ?? Self.isExecutableCursorCLIPath(appSettings.cursorCLIExecutablePath)
+        if aiPlannerAvailable == nil {
+            settingsCancellable = appSettings.$cursorCLIExecutablePath
+                .sink { [weak self] path in
+                    self?.isAIAssistantAvailable = Self.isExecutableCursorCLIPath(path)
+                }
+        }
         configureDirectoryMonitor()
         reload()
     }
@@ -169,19 +204,23 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
                 items = sortedItems
                 isLoading = false
 
-                if let pendingSelectionURL {
-                    self.pendingSelectionURL = nil
-                    let normalized = pendingSelectionURL.standardizedFileURL
-                    selectedItems = sortedItems.contains(where: { $0.id == normalized }) ? [normalized] : []
+                if !pendingSelectionURLs.isEmpty {
+                    let pending = Set(pendingSelectionURLs.map(\.standardizedFileURL))
+                    pendingSelectionURLs.removeAll()
+                    selectedItems = Set(visibleItems.lazy.map(\.id).filter(pending.contains))
                 } else {
-                    let availableIDs = Set(sortedItems.map(\.id))
+                    let availableIDs = Set(visibleItems.map(\.id))
                     selectedItems.formIntersection(availableIDs)
                 }
             } catch is CancellationError {
                 // A newer request owns the loading state.
             } catch {
                 guard loadGeneration == requestGeneration, location == requestedLocation else { return }
-                errorMessage = "Cannot load \(requestedLocation.title): \(error.localizedDescription)"
+                errorMessage = L10n.format(
+                    "Cannot load %@: %@",
+                    requestedLocation.title,
+                    error.localizedDescription
+                )
                 items = []
                 selectedItems.removeAll()
                 isLoading = false
@@ -284,7 +323,9 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
             ],
             options: options
         ) else {
-            throw FileOperationError(message: "The folder “\(root.lastPathComponent)” could not be searched.")
+            throw FileOperationError(
+                message: L10n.format("The folder “%@” could not be searched.", root.lastPathComponent)
+            )
         }
 
         var items: [FileItem] = []
@@ -329,7 +370,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
             NSSortDescriptor(key: "kMDItemContentModificationDate", ascending: false)
         ]
         guard query.start() else {
-            throw FileOperationError(message: "Spotlight could not start the query.")
+            throw FileOperationError(message: L10n.string("Spotlight could not start the query."))
         }
         defer { query.stop() }
 
@@ -365,12 +406,17 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
                 NSWorkspace.shared.open(normalizedURL)
             }
         } catch {
-            errorMessage = "Cannot open “\(normalizedURL.lastPathComponent)”: \(error.localizedDescription)"
+            errorMessage = L10n.format(
+                "Cannot open “%@”: %@",
+                normalizedURL.lastPathComponent,
+                error.localizedDescription
+            )
         }
     }
 
     func navigate(to newLocation: BrowserLocation) {
         let normalizedLocation = Self.normalized(newLocation)
+        clearFilter()
         guard normalizedLocation != location else {
             reload()
             return
@@ -386,17 +432,18 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: parentURL.path, isDirectory: &isDirectory),
               isDirectory.boolValue else {
-            errorMessage = "The enclosing folder does not exist."
+            errorMessage = L10n.string("The enclosing folder does not exist.")
             return
         }
 
-        pendingSelectionURL = normalizedFileURL
         let target = BrowserLocation.directory(parentURL)
         if target != location {
             backHistory.append(location)
             forwardHistory.removeAll()
             transition(to: target)
+            pendingSelectionURLs = [normalizedFileURL]
         } else {
+            pendingSelectionURLs = [normalizedFileURL]
             reload()
         }
     }
@@ -435,7 +482,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
             openItems([item.url], withApplicationAt: applicationURL)
         } else {
             guard NSWorkspace.shared.open(item.url) else {
-                errorMessage = "无法打开“\(item.name)”。"
+                errorMessage = L10n.format("Could not open “%@”.", item.name)
                 return
             }
         }
@@ -452,7 +499,11 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
             guard let error else { return }
             Task { @MainActor [weak self] in
                 let applicationName = applicationURL.deletingPathExtension().lastPathComponent
-                self?.errorMessage = "无法使用“\(applicationName)”打开文件：\(error.localizedDescription)"
+                self?.errorMessage = L10n.format(
+                    "Could not open the file with “%@”: %@",
+                    applicationName,
+                    error.localizedDescription
+                )
             }
         }
     }
@@ -462,6 +513,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     }
 
     private func transition(to newLocation: BrowserLocation) {
+        clearFilter()
         cancelAIAnswering()
         cancelAIPlanning()
         aiConversation.removeAll()
@@ -475,7 +527,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         location = Self.normalized(newLocation)
         selectedItems.removeAll()
         items.removeAll()
-        pendingSelectionURL = nil
+        pendingSelectionURLs.removeAll()
         configureDirectoryMonitor()
         reload()
     }
@@ -490,6 +542,12 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         }
     }
 
+    private static func isExecutableCursorCLIPath(_ path: String) -> Bool {
+        return FileManager.default.isExecutableFile(
+            atPath: AppSettings.resolvedCursorCLIExecutableURL(from: path).path
+        )
+    }
+
     // MARK: - Sorting and visibility
 
     func toggleSort(by field: SortField) {
@@ -501,6 +559,10 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         showHiddenFiles.toggle()
     }
 
+    func clearFilter() {
+        filterText = ""
+    }
+
     // MARK: - Selection
 
     func selectForContextMenu(_ ids: Set<FileItem.ID>) {
@@ -509,21 +571,18 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     }
 
     func selectAll() {
-        selectedItems = Set(items.map(\.id))
+        selectedItems = Set(visibleItems.map(\.id))
     }
 
     // MARK: - File operations
 
     func newFolder() {
         guard let destination = currentURL else {
-            errorMessage = "New folders can only be created inside a folder."
+            errorMessage = L10n.string("New folders can only be created inside a folder.")
             return
         }
         operationService.createFolderDetailed(in: destination) { [weak self] result in
-            if result.status == .completed {
-                self?.pendingSelectionURL = result.completedOutcomes.first?.destination
-            }
-            self?.finishOperation(result)
+            self?.finishOperation(result, selectingCompletedDestinations: true)
         }
     }
 
@@ -546,10 +605,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
 
         let destination = item.url.deletingLastPathComponent().appendingPathComponent(newName)
         operationService.renameDetailed(item.url, to: destination) { [weak self] result in
-            if result.status == .completed {
-                self?.pendingSelectionURL = result.completedOutcomes.first?.destination
-            }
-            self?.finishOperation(result)
+            self?.finishOperation(result, selectingCompletedDestinations: true)
         }
     }
 
@@ -558,7 +614,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         guard selection.count >= 2 else { return }
         guard let parent = selection.first?.url.deletingLastPathComponent(),
               selection.allSatisfy({ $0.url.deletingLastPathComponent() == parent }) else {
-            errorMessage = "Items can only be renamed together when they are in the same folder."
+            errorMessage = L10n.string("Items can only be renamed together when they are in the same folder.")
             return
         }
         batchRenameItems = selection
@@ -567,37 +623,38 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     func batchRename(_ pairs: [BatchRenamePair]) {
         guard !pairs.isEmpty else { return }
         operationService.batchRenameDetailed(pairs) { [weak self] result in
-            self?.finishOperation(result)
+            self?.finishOperation(result, selectingCompletedDestinations: true)
         }
     }
 
     func compressItems(_ urls: [URL]) {
         guard !urls.isEmpty else { return }
         operationService.compressDetailed(urls) { [weak self] result in
-            if result.status == .completed {
-                self?.pendingSelectionURL = result.completedOutcomes.first?.destination
-            }
-            self?.finishOperation(result)
+            self?.finishOperation(result, selectingCompletedDestinations: true)
         }
     }
 
     func extractItems(_ urls: [URL]) {
         guard !urls.isEmpty else { return }
         operationService.extractDetailed(urls) { [weak self] result in
-            if result.status == .completed {
-                self?.pendingSelectionURL = result.completedOutcomes.first?.destination
-            }
-            self?.finishOperation(result)
+            self?.finishOperation(result, selectingCompletedDestinations: true)
         }
     }
 
-    func copyItems(from urls: [URL], conflictPolicy: FileConflictPolicy = .ask) {
+    func copyItems(
+        from urls: [URL],
+        conflictPolicy: FileConflictPolicy = .ask,
+        completion: ((FileOperationResult) -> Void)? = nil
+    ) {
         guard let destination = currentURL else {
-            errorMessage = "Items can only be pasted inside a folder."
+            let message = L10n.string("Items can only be pasted inside a folder.")
+            errorMessage = message
+            completion?(FileOperationResult(status: .failed, outcomes: [], errorMessage: message))
             return
         }
         operationService.copyDetailed(urls, to: destination, conflictPolicy: conflictPolicy) { [weak self] result in
-            self?.finishOperation(result)
+            self?.finishOperation(result, selectingCompletedDestinations: true)
+            completion?(result)
         }
     }
 
@@ -607,16 +664,17 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         completion: ((FileOperationResult) -> Void)? = nil
     ) {
         guard let destination = currentURL else {
-            errorMessage = "Items can only be moved inside a folder."
+            let message = L10n.string("Items can only be moved inside a folder.")
+            errorMessage = message
             completion?(FileOperationResult(
                 status: .failed,
                 outcomes: [],
-                errorMessage: "Items can only be moved inside a folder."
+                errorMessage: message
             ))
             return
         }
         operationService.moveDetailed(urls, to: destination, conflictPolicy: conflictPolicy) { [weak self] result in
-            self?.finishOperation(result)
+            self?.finishOperation(result, selectingCompletedDestinations: true)
             completion?(result)
         }
     }
@@ -634,7 +692,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         guard !sources.isEmpty else { return false }
 
         let completion: (FileOperationResult) -> Void = { [weak self] result in
-            self?.finishOperation(result)
+            self?.finishOperation(result, selectingCompletedDestinations: true)
         }
         switch operation {
         case .move:
@@ -652,24 +710,28 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     ) -> [URL] {
         let destination = destination.standardizedFileURL
         var seen: Set<URL> = []
-
-        return urls.compactMap { url in
+        let sources = urls.compactMap { url -> URL? in
             let source = url.standardizedFileURL
-            guard seen.insert(source).inserted,
-                  source != destination,
-                  !FileDropSafety.isProtectedSource(source) else { return nil }
+            return seen.insert(source).inserted ? source : nil
+        }
+
+        guard sources.allSatisfy({ source in
+            guard source != destination,
+                  !FileDropSafety.isProtectedSource(source) else { return false }
 
             if operation == .move,
                source.deletingLastPathComponent().standardizedFileURL == destination {
-                return nil
+                return false
             }
 
             if Self.isRealDirectory(source),
                Self.isDescendant(destination, of: source) {
-                return nil
+                return false
             }
-            return source
-        }
+            return true
+        }) else { return [] }
+
+        return sources
     }
 
     private static func isDirectory(_ url: URL) -> Bool {
@@ -736,11 +798,13 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isAIAnswering else { return }
         guard let scopeRoot = currentURL else {
-            aiAssistantErrorMessage = "请先打开一个文件夹再提问。"
+            aiAssistantErrorMessage = L10n.string("Open a folder before asking a question.")
             return
         }
 
         aiAnswerTask?.cancel()
+        let requestID = UUID()
+        aiAnswerRequestID = requestID
         isAIAnswering = true
         aiPendingQuestion = trimmed
         aiAssistantErrorMessage = nil
@@ -748,10 +812,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         let previousExchanges = Array(aiConversation.suffix(6))
 
         aiAnswerTask = Task { [weak self] in
-            defer {
-                self?.isAIAnswering = false
-                self?.aiPendingQuestion = nil
-            }
+            defer { self?.finishAIAnswering(requestID: requestID) }
             do {
                 let answer = try await answerer.answer(AIAssistantRequest(
                     question: trimmed,
@@ -759,12 +820,15 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
                     previousExchanges: previousExchanges
                 ))
                 try Task.checkCancellation()
-                self?.aiConversation.append(AIAssistantExchange(question: trimmed, answer: answer))
+                guard let self, self.aiAnswerRequestID == requestID else { return }
+                self.aiConversation.append(AIAssistantExchange(question: trimmed, answer: answer))
             } catch is CancellationError {
                 return
             } catch {
-                guard !Task.isCancelled else { return }
-                self?.aiAssistantErrorMessage = error.localizedDescription
+                guard let self,
+                      !Task.isCancelled,
+                      self.aiAnswerRequestID == requestID else { return }
+                self.aiAssistantErrorMessage = error.localizedDescription
             }
         }
     }
@@ -772,6 +836,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     func cancelAIAnswering() {
         aiAnswerTask?.cancel()
         aiAnswerTask = nil
+        aiAnswerRequestID = nil
         isAIAnswering = false
         aiPendingQuestion = nil
     }
@@ -786,27 +851,32 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         let trimmed = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isAIPlanning else { return }
         guard let scopeRoot = currentURL else {
-            aiOrganizeErrorMessage = "请先打开一个文件夹再使用 AI 整理。"
+            aiOrganizeErrorMessage = L10n.string("Open a folder before using AI Organize.")
             return
         }
 
         aiPlanTask?.cancel()
+        let requestID = UUID()
+        aiPlanRequestID = requestID
         isAIPlanning = true
         aiOrganizeErrorMessage = nil
         aiPlanPreview = nil
         let planner = aiPlanner
 
         aiPlanTask = Task { [weak self] in
-            defer { self?.isAIPlanning = false }
+            defer { self?.finishAIPlanning(requestID: requestID) }
             do {
                 let plan = try await planner.plan(AIPlanRequest(instruction: trimmed, scopeRoot: scopeRoot))
                 try Task.checkCancellation()
-                self?.handleAIOrganizePlan(plan, scopeRoot: scopeRoot)
+                guard let self, self.aiPlanRequestID == requestID else { return }
+                self.handleAIOrganizePlan(plan, scopeRoot: scopeRoot)
             } catch is CancellationError {
                 return
             } catch {
-                guard !Task.isCancelled else { return }
-                self?.aiOrganizeErrorMessage = error.localizedDescription
+                guard let self,
+                      !Task.isCancelled,
+                      self.aiPlanRequestID == requestID else { return }
+                self.aiOrganizeErrorMessage = error.localizedDescription
             }
         }
     }
@@ -814,19 +884,22 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     func cancelAIPlanning() {
         aiPlanTask?.cancel()
         aiPlanTask = nil
+        aiPlanRequestID = nil
         isAIPlanning = false
     }
 
     func executeAIPlan(_ operations: [AIPlanOperation], scopeRoot: URL) {
         guard !operations.isEmpty else { return }
         operationService.aiOrganizeDetailed(operations, scopeRoot: scopeRoot) { [weak self] result in
-            self?.finishOperation(result)
+            self?.finishOperation(result, selectingCompletedDestinations: true)
         }
     }
 
     private func handleAIOrganizePlan(_ plan: AIPlan, scopeRoot: URL) {
         guard plan.kind == .organize else {
-            aiOrganizeErrorMessage = "AI 返回了搜索结果，而不是文件整理方案。"
+            aiOrganizeErrorMessage = L10n.string(
+                "AI returned search results instead of a file organization plan."
+            )
             return
         }
         do {
@@ -837,13 +910,48 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         }
     }
 
-    private func finishOperation(_ result: FileOperationResult) {
+    private func finishAIAnswering(requestID: UUID) {
+        guard aiAnswerRequestID == requestID else { return }
+        aiAnswerTask = nil
+        aiAnswerRequestID = nil
+        isAIAnswering = false
+        aiPendingQuestion = nil
+    }
+
+    private func finishAIPlanning(requestID: UUID) {
+        guard aiPlanRequestID == requestID else { return }
+        aiPlanTask = nil
+        aiPlanRequestID = nil
+        isAIPlanning = false
+    }
+
+    private func finishOperation(
+        _ result: FileOperationResult,
+        selectingCompletedDestinations: Bool = false
+    ) {
+        if selectingCompletedDestinations {
+            prepareCompletedSelection(from: result)
+        }
         if result.status != .completed {
-            errorMessage = result.errorMessage ?? "The operation did not complete."
+            errorMessage = result.errorMessage ?? L10n.string("The operation did not complete.")
             reload(preservingError: true)
         } else {
             reload()
         }
+    }
+
+    private func prepareCompletedSelection(from result: FileOperationResult) {
+        guard let currentURL = currentURL?.standardizedFileURL else { return }
+        let destinations = Set(result.completedOutcomes.compactMap { outcome -> URL? in
+            guard let destination = outcome.destination?.standardizedFileURL,
+                  destination.deletingLastPathComponent().standardizedFileURL == currentURL else {
+                return nil
+            }
+            return destination
+        })
+        guard !destinations.isEmpty else { return }
+        clearFilter()
+        pendingSelectionURLs = destinations
     }
 
     // MARK: - Directory monitoring

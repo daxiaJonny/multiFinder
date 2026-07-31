@@ -91,32 +91,32 @@ private struct WorkspaceSurface: View {
             \.workspaceTemplateActions,
             WorkspaceTemplateActions(save: saveCurrentTemplate, saveAs: beginSavingTemplateAs)
         )
-        .alert("另存工作区模板", isPresented: $isNamingTemplate) {
-            TextField("模板名称", text: $templateName)
-            Button("取消", role: .cancel) {}
-            Button("另存为", action: saveTemplateAs)
+        .alert("Save Workspace Template As", isPresented: $isNamingTemplate) {
+            TextField("Template Name", text: $templateName)
+            Button("Cancel", role: .cancel) {}
+            Button("Save As", action: saveTemplateAs)
                 .disabled(templateNameIsEmpty || templateNameAlreadyExists)
         } message: {
             if templateNameAlreadyExists {
-                Text("已存在同名模板，请使用其他名称。")
+                Text("A template with this name already exists. Choose another name.")
             } else {
-                Text("将当前工作区创建为新模板，原模板不会被覆盖。")
+                Text("Create a new template from the current workspace without replacing the original template.")
             }
         }
         .confirmationDialog(
-            "删除工作区模板？",
+            "Delete Workspace Template?",
             isPresented: deleteTemplatePresented,
             titleVisibility: .visible,
             presenting: templatePendingDeletion
         ) { template in
-            Button("删除“\(template.name)”", role: .destructive) {
+            Button(L10n.format("Delete “%@”", template.name), role: .destructive) {
                 templateStore.remove(id: template.id)
                 if currentTemplateID == template.id {
                     activeTemplateID = ""
                 }
                 templatePendingDeletion = nil
             }
-            Button("取消", role: .cancel) {
+            Button("Cancel", role: .cancel) {
                 templatePendingDeletion = nil
             }
         }
@@ -148,7 +148,11 @@ private struct WorkspaceSurface: View {
                 operationService.resolveConflict(.cancel, applyToAll: false)
             }
         } message: { conflict in
-            Text("“\(conflict.destination.lastPathComponent)” already exists in \(conflict.destination.deletingLastPathComponent().path).")
+            Text(L10n.format(
+                "“%@” already exists in %@.",
+                conflict.destination.lastPathComponent,
+                conflict.destination.deletingLastPathComponent().path
+            ))
         }
     }
 
@@ -219,8 +223,8 @@ private struct WorkspaceSurface: View {
     }
 
     private func availableTemplateName() -> String {
-        let baseName = currentTemplate.map { "\($0.name) 副本" }
-            ?? "工作区 \(templateStore.templates.count + 1)"
+        let baseName = currentTemplate.map { L10n.format("%@ Copy", $0.name) }
+            ?? L10n.format("Workspace %lld", Int64(templateStore.templates.count + 1))
         guard templateStore.contains(name: baseName) else { return baseName }
 
         var suffix = 2
@@ -238,7 +242,8 @@ private struct BrowserToolbar: ToolbarContent {
     @ObservedObject private var operationService = FileOperationService.shared
     @ObservedObject private var favoritesStore = FavoritesStore.shared
     @ObservedObject private var templateStore = WorkspaceTemplateStore.shared
-    private let iTermService = ITermService.shared
+    @ObservedObject private var appSettings = AppSettings.shared
+    private let terminalService = TerminalService.shared
     let activeTemplateID: WorkspaceTemplate.ID?
     let onSaveTemplate: () -> Void
     let onSaveTemplateAs: () -> Void
@@ -271,27 +276,39 @@ private struct BrowserToolbar: ToolbarContent {
                 Image(systemName: isCurrentFolderFavorite ? "star.fill" : "star")
             }
             .disabled(pane.currentURL == nil)
-            .help(isCurrentFolderFavorite ? "Remove from Favorites" : "Add to Favorites")
+            .help(
+                isCurrentFolderFavorite
+                    ? L10n.string("Remove from Favorites")
+                    : L10n.string("Add to Favorites")
+            )
 
             Button(action: pane.presentSearch) {
                 Image(systemName: "magnifyingglass")
-                    .accessibilityLabel("搜索")
+                    .accessibilityLabel("Search")
             }
-            .help("搜索")
+            .help("Search")
 
             Button(action: pane.toggleAIAssistant) {
                 Image(systemName: "sparkles")
-                    .accessibilityLabel("询问当前文件夹")
+                    .accessibilityLabel("Ask About Current Folder")
             }
             .disabled(pane.currentURL == nil || !pane.isAIAssistantAvailable)
-            .help(pane.isAIAssistantAvailable ? "询问当前文件夹" : "未安装 Cursor CLI")
+            .help(
+                pane.isAIAssistantAvailable
+                    ? L10n.string("Ask About Current Folder")
+                    : L10n.string("Cursor CLI Not Installed")
+            )
 
             Button(action: pane.presentAIOrganize) {
                 Image(systemName: "wand.and.stars")
-                    .accessibilityLabel("AI 整理")
+                    .accessibilityLabel("AI Organize")
             }
             .disabled(pane.currentURL == nil || !pane.isAIAssistantAvailable)
-            .help(pane.isAIAssistantAvailable ? "AI 整理" : "未安装 Cursor CLI")
+            .help(
+                pane.isAIAssistantAvailable
+                    ? L10n.string("AI Organize")
+                    : L10n.string("Cursor CLI Not Installed")
+            )
 
             Button(action: pane.newFolder) {
                 Image(systemName: "folder.badge.plus")
@@ -304,11 +321,15 @@ private struct BrowserToolbar: ToolbarContent {
             }
             .help("Toggle Hidden Files")
 
-            Button(action: openInITerm) {
+            Button(action: openInTerminal) {
                 Image(systemName: "terminal")
             }
-            .disabled(pane.currentURL == nil || !iTermService.isAvailable)
-            .help(iTermService.isAvailable ? "Open in iTerm2" : "iTerm2 Not Installed")
+            .disabled(pane.currentURL == nil || !terminalService.isAvailable)
+            .help(
+                terminalService.isAvailable
+                    ? L10n.format("Open in %@", terminalApplicationName)
+                    : L10n.format("%@ is not installed.", terminalApplicationName)
+            )
 
             Button(action: paste) {
                 Image(systemName: "doc.on.clipboard")
@@ -324,11 +345,15 @@ private struct BrowserToolbar: ToolbarContent {
                 } else {
                     ForEach(operationService.history.prefix(12)) { record in
                         if record.status == .failed {
-                            Button("Retry \(record.kind.rawValue)") {
+                            Button(L10n.format("Retry %@", record.kind.localizedName)) {
                                 operationService.retry(record.id)
                             }
                         } else {
-                            Text("\(record.kind.rawValue) · \(record.status.rawValue.capitalized)")
+                            Text(L10n.format(
+                                "%@ · %@",
+                                record.kind.localizedName,
+                                record.status.localizedName
+                            ))
                         }
                     }
                 }
@@ -339,11 +364,11 @@ private struct BrowserToolbar: ToolbarContent {
 
             Menu {
                 Button(saveTemplateTitle, action: onSaveTemplate)
-                Button("另存为…", action: onSaveTemplateAs)
+                Button("Save As…", action: onSaveTemplateAs)
 
                 if templateStore.templates.isEmpty {
                     Divider()
-                    Text("暂无已保存模板")
+                    Text("No Saved Templates")
                 } else {
                     Divider()
                     ForEach(templateStore.templates) { template in
@@ -358,7 +383,7 @@ private struct BrowserToolbar: ToolbarContent {
                         }
                     }
                     Divider()
-                    Menu("删除模板") {
+                    Menu("Delete Template") {
                         ForEach(templateStore.templates) { template in
                             Button(template.name, role: .destructive) {
                                 onDeleteTemplate(template)
@@ -369,7 +394,7 @@ private struct BrowserToolbar: ToolbarContent {
             } label: {
                 Image(systemName: "square.grid.2x2")
             }
-            .help("工作区模板")
+            .help("Workspace Templates")
 
             Menu {
                 Button {
@@ -467,21 +492,25 @@ private struct BrowserToolbar: ToolbarContent {
         favoritesStore.toggle(url)
     }
 
-    private func openInITerm() {
+    private func openInTerminal() {
         guard let url = pane.currentURL else { return }
         do {
-            try iTermService.openDirectory(url)
+            try terminalService.openDirectory(url)
         } catch {
             pane.errorMessage = error.localizedDescription
         }
     }
 
+    private var terminalApplicationName: String {
+        appSettings.preferredTerminalApplication.displayName
+    }
+
     private var saveTemplateTitle: String {
         guard let activeTemplateID,
               let template = templateStore.templates.first(where: { $0.id == activeTemplateID }) else {
-            return "保存…"
+            return L10n.string("Save…")
         }
-        return "保存到“\(template.name)”"
+        return L10n.format("Save to “%@”", template.name)
     }
 }
 

@@ -136,9 +136,18 @@ private struct SplitResizeHandle: View {
                         onCommit()
                     }
             )
+            .accessibilityLabel(resizeLabel)
+            .accessibilityHint("Drag to resize")
+            .help(resizeLabel)
     }
 
     private var cursor: NSCursor {
         axis == .vertical ? .resizeLeftRight : .resizeUpDown
+    }
+
+    private var resizeLabel: String {
+        axis == .vertical
+            ? L10n.string("Resize Columns")
+            : L10n.string("Resize Rows")
     }
 }

@@ -48,7 +48,11 @@ enum PlanValidator {
     ) throws -> PlanValidationResult {
         guard operations.count <= maximumOperationCount else {
             throw PlanValidationError(
-                message: "整理方案包含 \(operations.count) 项操作，最多允许 \(maximumOperationCount) 项。"
+                message: L10n.format(
+                    "The organize plan contains %lld operations; the maximum is %lld.",
+                    Int64(operations.count),
+                    Int64(maximumOperationCount)
+                )
             )
         }
 
@@ -73,7 +77,10 @@ enum PlanValidator {
                 let key = pathKey(source)
                 let existsOnDisk = fileManager.fileExists(atPath: source.path) && !removedPaths.contains(key)
                 if !existsOnDisk && !createdPaths.contains(key) {
-                    issues.append(OperationIssue(message: "“\(item.sourceDisplay ?? source.lastPathComponent)” does not exist."))
+                    issues.append(OperationIssue(message: L10n.format(
+                        "“%@” does not exist.",
+                        item.sourceDisplay ?? source.lastPathComponent
+                    )))
                 }
             }
 
@@ -83,7 +90,10 @@ enum PlanValidator {
                 let parentOnDisk = fileManager.fileExists(atPath: parent.path) && !removedPaths.contains(parentKey)
                 if parent.path != root.path && !parentOnDisk && !createdPaths.contains(parentKey) {
                     issues.append(OperationIssue(
-                        message: "“\(item.destinationDisplay ?? destination.lastPathComponent)”的上级文件夹不存在。"
+                        message: L10n.format(
+                            "The enclosing folder for “%@” does not exist.",
+                            item.destinationDisplay ?? destination.lastPathComponent
+                        )
                     ))
                 }
             }
@@ -92,12 +102,18 @@ enum PlanValidator {
                 let key = pathKey(destination)
                 let display = item.destinationDisplay ?? destination.lastPathComponent
                 if destinationCounts[key, default: 0] > 1 {
-                    issues.append(OperationIssue(message: "多项操作的目标都是“\(display)”。"))
+                    issues.append(OperationIssue(message: L10n.format(
+                        "Multiple operations have the same destination: “%@”.",
+                        display
+                    )))
                 }
                 let isCaseOnlySelfTarget = item.source.map { pathKey($0) == key } ?? false
                 let occupiedOnDisk = fileManager.fileExists(atPath: destination.path) && !removedPaths.contains(key)
                 if !isCaseOnlySelfTarget && (occupiedOnDisk || createdPaths.contains(key)) {
-                    issues.append(OperationIssue(message: "已存在名为“\(display)”的项目。"))
+                    issues.append(OperationIssue(message: L10n.format(
+                        "An item named “%@” already exists.",
+                        display
+                    )))
                 }
             }
 
@@ -190,7 +206,9 @@ enum PlanValidator {
     private static func resolveSourcePath(_ relativePath: String, in root: URL) throws -> URL {
         let resolved = try resolvePath(relativePath, in: root)
         guard resolved.path != root.path else {
-            throw PlanValidationError(message: "整理方案不能操作当前文件夹本身。")
+            throw PlanValidationError(
+                message: L10n.string("The organize plan cannot modify the current folder itself.")
+            )
         }
         return resolved
     }
@@ -198,19 +216,28 @@ enum PlanValidator {
     private static func resolvePath(_ relativePath: String, in root: URL) throws -> URL {
         let trimmed = relativePath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            throw PlanValidationError(message: "整理方案中存在路径为空的操作。")
+            throw PlanValidationError(
+                message: L10n.string("An operation in the organize plan has an empty path.")
+            )
         }
         guard !trimmed.hasPrefix("/"), !trimmed.hasPrefix("~") else {
             throw PlanValidationError(
-                message: "“\(trimmed)” is an absolute path; only paths inside the current folder are allowed."
+                message: L10n.format(
+                    "“%@” is an absolute path; only paths inside the current folder are allowed.",
+                    trimmed
+                )
             )
         }
         guard !trimmed.split(separator: "/").contains("..") else {
-            throw PlanValidationError(message: "“\(trimmed)” points outside the current folder.")
+            throw PlanValidationError(
+                message: L10n.format("“%@” points outside the current folder.", trimmed)
+            )
         }
         let resolved = root.appendingPathComponent(trimmed).standardizedFileURL.resolvingSymlinksInPath()
         guard resolved.path == root.path || resolved.path.hasPrefix(root.path + "/") else {
-            throw PlanValidationError(message: "“\(trimmed)” escapes the current folder.")
+            throw PlanValidationError(
+                message: L10n.format("“%@” escapes the current folder.", trimmed)
+            )
         }
         return resolved
     }

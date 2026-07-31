@@ -62,14 +62,17 @@ final class ArchiveOperationTests: XCTestCase {
     func testCompressMultipleItemsCreatesUniqueArchiveName() async throws {
         let first = workingDirectory.appendingPathComponent("first.txt")
         let second = workingDirectory.appendingPathComponent("second.txt")
+        let archiveBaseName = L10n.string("Archive")
         try Data("first".utf8).write(to: first)
         try Data("second".utf8).write(to: second)
-        try Data("occupied".utf8).write(to: workingDirectory.appendingPathComponent("Archive.zip"))
+        try Data("occupied".utf8).write(
+            to: workingDirectory.appendingPathComponent("\(archiveBaseName).zip")
+        )
 
         let compressResult = await performDetailed { completion in
             service.compressDetailed([first, second], completion: completion)
         }
-        let archive = workingDirectory.appendingPathComponent("Archive 2.zip")
+        let archive = workingDirectory.appendingPathComponent("\(archiveBaseName) 2.zip")
 
         XCTAssertEqual(compressResult.status, .completed)
         XCTAssertEqual(compressResult.outcomes.first?.destination, archive)
@@ -77,7 +80,7 @@ final class ArchiveOperationTests: XCTestCase {
         let extractResult = await performDetailed { completion in
             service.extractDetailed([archive], completion: completion)
         }
-        let extracted = workingDirectory.appendingPathComponent("Archive 2")
+        let extracted = workingDirectory.appendingPathComponent("\(archiveBaseName) 2")
 
         XCTAssertEqual(extractResult.status, .completed)
         XCTAssertEqual(try String(contentsOf: extracted.appendingPathComponent("first.txt")), "first")

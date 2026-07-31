@@ -7,9 +7,18 @@ final class FileClipboardTests: XCTestCase {
     @MainActor
     func testTextEditingCommandRouterRecognizesTextRespondersOnly() {
         XCTAssertTrue(TextEditingCommandRouter.isTextEditingResponder(NSTextView()))
-        XCTAssertTrue(TextEditingCommandRouter.isTextEditingResponder(NSTextField()))
+        XCTAssertFalse(TextEditingCommandRouter.isTextEditingResponder(NSTextField()))
         XCTAssertFalse(TextEditingCommandRouter.isTextEditingResponder(NSView()))
         XCTAssertFalse(TextEditingCommandRouter.isTextEditingResponder(nil))
+    }
+
+    func testTextEditingUndoAndRedoAreConsumedWithoutAvailableEdits() {
+        let textView = NSTextView()
+
+        XCTAssertTrue(TextEditingCommandRouter.performUndo(on: textView))
+        XCTAssertTrue(TextEditingCommandRouter.performRedo(on: textView))
+        XCTAssertFalse(TextEditingCommandRouter.performUndo(on: NSTextField()))
+        XCTAssertFalse(TextEditingCommandRouter.performRedo(on: NSView()))
     }
 
     private var pasteboard: NSPasteboard!

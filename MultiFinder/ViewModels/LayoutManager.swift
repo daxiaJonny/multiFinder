@@ -186,7 +186,7 @@ final class LayoutManager: ObservableObject {
         var isDirectory: ObjCBool = false
         guard targetURL.isFileURL,
               FileManager.default.fileExists(atPath: targetURL.path, isDirectory: &isDirectory) else {
-            focusedPane?.errorMessage = "The requested path does not exist."
+            focusedPane?.errorMessage = L10n.string("The requested path does not exist.")
             return false
         }
 
@@ -310,6 +310,7 @@ final class LayoutManager: ObservableObject {
 
     func newTab(in paneID: UUID) {
         guard let pane = findPane(id: paneID) else { return }
+        pane.selectedTab.clearFilter()
         let newTab = clonedTab(from: pane.selectedTab)
         pane.tabs.insert(newTab, at: pane.selectedTabIndex + 1)
         pane.selectedTabIndex += 1
@@ -339,6 +340,9 @@ final class LayoutManager: ObservableObject {
 
     func selectTab(at index: Int, in paneID: UUID) {
         guard let pane = findPane(id: paneID), pane.tabs.indices.contains(index) else { return }
+        if index != pane.selectedTabIndex {
+            pane.selectedTab.clearFilter()
+        }
         pane.selectedTabIndex = index
         focusedPaneID = paneID
         save()
@@ -346,14 +350,126 @@ final class LayoutManager: ObservableObject {
 
     func selectNextTab(in paneID: UUID) {
         guard let pane = findPane(id: paneID), pane.tabs.count > 1 else { return }
+        pane.selectedTab.clearFilter()
         pane.selectedTabIndex = (pane.selectedTabIndex + 1) % pane.tabs.count
         save()
     }
 
     func selectPreviousTab(in paneID: UUID) {
         guard let pane = findPane(id: paneID), pane.tabs.count > 1 else { return }
+        pane.selectedTab.clearFilter()
         pane.selectedTabIndex = (pane.selectedTabIndex + pane.tabs.count - 1) % pane.tabs.count
         save()
+    }
+
+    func adjacentPane(of paneID: UUID) -> BrowserPane? {
+        let panes = allPanes
+        guard panes.count > 1,
+              let index = panes.firstIndex(where: { $0.id == paneID }) else { return nil }
+        return panes[(index + 1) % panes.count]
+    }
+
+    func canTransferSelectionToAdjacentPane(
+        from paneID: UUID,
+        operation: FileDropOperation
+    ) -> Bool {
+        guard let source = findPane(id: paneID)?.selectedTab else { return false }
+        return canTransferItemsToAdjacentPane(
+            source.selectedItemURLs,
+            from: paneID,
+            operation: operation
+        )
+    }
+
+    func canTransferItemsToAdjacentPane(
+        _ urls: [URL],
+        from paneID: UUID,
+        operation: FileDropOperation
+    ) -> Bool {
+        guard !urls.isEmpty,
+              let target = adjacentPane(of: paneID)?.selectedTab,
+              case .directory(let destination) = target.location,
+              Self.isOrdinaryDirectory(destination) else { return false }
+
+        return !FileBrowserViewModel.validDropSources(
+            urls,
+            into: destination,
+            operation: operation
+        ).isEmpty
+    }
+
+    @discardableResult
+    func copySelectionToAdjacentPane() -> Bool {
+        guard let focusedPaneID else { return false }
+        return transferSelectedItemsToAdjacentPane(from: focusedPaneID, operation: .copy)
+    }
+
+    @discardableResult
+    func moveSelectionToAdjacentPane() -> Bool {
+        guard let focusedPaneID else { return false }
+        return transferSelectedItemsToAdjacentPane(from: focusedPaneID, operation: .move)
+    }
+
+    @discardableResult
+    func transferSelectedItemsToAdjacentPane(
+        from paneID: UUID,
+        operation: FileDropOperation
+    ) -> Bool {
+        guard let sourcePane = findPane(id: paneID) else { return false }
+        let urls = sourcePane.selectedTab.selectedItemURLs
+        guard !urls.isEmpty else {
+            sourcePane.selectedTab.errorMessage = L10n.string("Please select at least one file or folder.")
+            return false
+        }
+        return transferItemsToAdjacentPane(urls, from: paneID, operation: operation)
+    }
+
+    @discardableResult
+    func transferItemsToAdjacentPane(
+        _ urls: [URL],
+        from paneID: UUID,
+        operation: FileDropOperation
+    ) -> Bool {
+        guard let sourcePane = findPane(id: paneID),
+              let targetPane = adjacentPane(of: paneID) else {
+            findPane(id: paneID)?.selectedTab.errorMessage = L10n.string(
+                "At least two panes are required for this operation."
+            )
+            return false
+        }
+
+        let source = sourcePane.selectedTab
+        let target = targetPane.selectedTab
+        guard case .directory(let destination) = target.location,
+              Self.isOrdinaryDirectory(destination) else {
+            source.errorMessage = L10n.string("The adjacent pane must show a regular folder.")
+            return false
+        }
+
+        let validSources = FileBrowserViewModel.validDropSources(
+            urls,
+            into: destination,
+            operation: operation
+        )
+        guard !validSources.isEmpty else {
+            source.errorMessage = operation == .copy
+                ? L10n.string("The selected items cannot be copied to the adjacent pane.")
+                : L10n.string("The selected items cannot be moved to the adjacent pane.")
+            return false
+        }
+
+        highlightPane(targetPane)
+        switch operation {
+        case .copy:
+            target.copyItems(from: validSources)
+        case .move:
+            target.moveItems(from: validSources) { [weak source] result in
+                if !result.completedOutcomes.isEmpty {
+                    source?.reload(preservingError: true)
+                }
+            }
+        }
+        return true
     }
 
     func focusPane(direction: FocusDirection) {
@@ -480,12 +596,16 @@ final class LayoutManager: ObservableObject {
             location: tab?.location ?? .directory(FileManager.default.homeDirectoryForCurrentUser),
             sortField: tab?.sortField ?? .name,
             sortAscending: tab?.sortAscending ?? true,
-            showHiddenFiles: tab?.showHiddenFiles ?? false
+            showHiddenFiles: tab?.showHiddenFiles ?? AppSettings.shared.showHiddenFilesByDefault
         )
     }
 
     private func focusAndHighlight(_ pane: BrowserPane) {
         focusedPaneID = pane.id
+        highlightPane(pane)
+    }
+
+    private func highlightPane(_ pane: BrowserPane) {
         highlightedPaneID = pane.id
         highlightTask?.cancel()
         highlightTask = Task { @MainActor [weak self] in
@@ -493,6 +613,13 @@ final class LayoutManager: ObservableObject {
             guard !Task.isCancelled, self?.highlightedPaneID == pane.id else { return }
             self?.highlightedPaneID = nil
         }
+    }
+
+    private nonisolated static func isOrdinaryDirectory(_ url: URL) -> Bool {
+        guard let values = try? url.standardizedFileURL.resourceValues(
+            forKeys: [.isDirectoryKey, .isPackageKey]
+        ) else { return false }
+        return values.isDirectory == true && values.isPackage != true
     }
 
     private func findPaneLocation(id: UUID) -> (rowIndex: Int, paneIndex: Int)? {

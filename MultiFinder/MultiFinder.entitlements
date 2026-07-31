@@ -7,10 +7,5 @@
 	     not the App Store. See docs/DISTRIBUTION.md. -->
 	<key>com.apple.security.app-sandbox</key>
 	<false/>
-	<!-- Hardened Runtime exception: ITermService uses NSAppleScript to send
-	     Apple Events to iTerm2 (matched by NSAppleEventsUsageDescription in
-	     Info.plist). -->
-	<key>com.apple.security.automation.apple-events</key>
-	<true/>
 </dict>
 </plist>

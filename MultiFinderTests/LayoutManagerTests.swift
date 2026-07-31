@@ -322,6 +322,189 @@ final class LayoutManagerTests: XCTestCase {
         XCTAssertEqual(manager.focusedPane?.id, pane.tabs[1].id)
     }
 
+    func testSwitchingTabsClearsFilterFromTabBeingLeft() throws {
+        let manager = LayoutManager()
+        let pane = try XCTUnwrap(manager.focusedBrowserPane)
+        manager.newTab(in: pane.id)
+        manager.selectTab(at: 0, in: pane.id)
+        pane.selectedTab.filterText = "swift"
+
+        manager.selectNextTab(in: pane.id)
+
+        XCTAssertEqual(pane.tabs[0].filterText, "")
+        XCTAssertEqual(pane.selectedTabIndex, 1)
+    }
+
+    func testAdjacentPaneUsesRowMajorOrderAndWraps() throws {
+        let manager = LayoutManager()
+        let first = manager.rows[0].panes[0]
+        let second = manager.rows[0].panes[1]
+        manager.addRowBelow(of: second.id)
+        let third = try XCTUnwrap(manager.rows.last?.panes.first)
+
+        XCTAssertEqual(manager.adjacentPane(of: first.id)?.id, second.id)
+        XCTAssertEqual(manager.adjacentPane(of: second.id)?.id, third.id)
+        XCTAssertEqual(manager.adjacentPane(of: third.id)?.id, first.id)
+    }
+
+    func testCopySelectionToAdjacentPaneCopiesAndSelectsDestination() async throws {
+        let sourceDirectory = try makeTemporaryDirectory()
+        let destinationDirectory = try makeTemporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: sourceDirectory)
+            try? FileManager.default.removeItem(at: destinationDirectory)
+        }
+        let sourceFile = sourceDirectory.appendingPathComponent("copy-me.txt")
+        try Data("copy".utf8).write(to: sourceFile)
+        let manager = LayoutManager()
+        let sourcePane = manager.rows[0].panes[0]
+        let targetPane = manager.rows[0].panes[1]
+        sourcePane.selectedTab.navigate(to: sourceDirectory)
+        targetPane.selectedTab.navigate(to: destinationDirectory)
+        manager.focusedPaneID = sourcePane.id
+        try await waitUntil {
+            !sourcePane.selectedTab.isLoading && !targetPane.selectedTab.isLoading
+        }
+        sourcePane.selectedTab.selectedItems = [sourceFile.standardizedFileURL]
+
+        XCTAssertTrue(manager.copySelectionToAdjacentPane())
+
+        let destination = destinationDirectory.appendingPathComponent("copy-me.txt").standardizedFileURL
+        try await waitUntil {
+            !targetPane.selectedTab.isLoading
+                && targetPane.selectedTab.selectedItems == [destination]
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceFile.path))
+        XCTAssertEqual(try String(contentsOf: destination), "copy")
+    }
+
+    func testMoveSelectionToAdjacentPaneMovesAndRefreshesBothPanes() async throws {
+        let sourceDirectory = try makeTemporaryDirectory()
+        let destinationDirectory = try makeTemporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: sourceDirectory)
+            try? FileManager.default.removeItem(at: destinationDirectory)
+        }
+        let sourceFile = sourceDirectory.appendingPathComponent("move-me.txt")
+        try Data("move".utf8).write(to: sourceFile)
+        let manager = LayoutManager()
+        let sourcePane = manager.rows[0].panes[0]
+        let targetPane = manager.rows[0].panes[1]
+        sourcePane.selectedTab.navigate(to: sourceDirectory)
+        targetPane.selectedTab.navigate(to: destinationDirectory)
+        manager.focusedPaneID = sourcePane.id
+        try await waitUntil {
+            !sourcePane.selectedTab.isLoading && !targetPane.selectedTab.isLoading
+        }
+        sourcePane.selectedTab.selectedItems = [sourceFile.standardizedFileURL]
+
+        XCTAssertTrue(manager.moveSelectionToAdjacentPane())
+
+        let destination = destinationDirectory.appendingPathComponent("move-me.txt").standardizedFileURL
+        try await waitUntil {
+            !sourcePane.selectedTab.isLoading
+                && !targetPane.selectedTab.isLoading
+                && sourcePane.selectedTab.items.isEmpty
+                && targetPane.selectedTab.selectedItems == [destination]
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sourceFile.path))
+        XCTAssertEqual(try String(contentsOf: destination), "move")
+    }
+
+    func testSameDirectoryDisablesMoveButStillAllowsCopyToAdjacentPane() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sourceFile = directory.appendingPathComponent("notes.txt")
+        try Data("notes".utf8).write(to: sourceFile)
+        let manager = LayoutManager()
+        let sourcePane = manager.rows[0].panes[0]
+        let targetPane = manager.rows[0].panes[1]
+        sourcePane.selectedTab.navigate(to: directory)
+        targetPane.selectedTab.navigate(to: directory)
+        manager.focusedPaneID = sourcePane.id
+        try await waitUntil {
+            !sourcePane.selectedTab.isLoading && !targetPane.selectedTab.isLoading
+        }
+        sourcePane.selectedTab.selectedItems = [sourceFile.standardizedFileURL]
+
+        XCTAssertTrue(
+            manager.canTransferSelectionToAdjacentPane(from: sourcePane.id, operation: .copy)
+        )
+        XCTAssertFalse(
+            manager.canTransferSelectionToAdjacentPane(from: sourcePane.id, operation: .move)
+        )
+        XCTAssertFalse(manager.moveSelectionToAdjacentPane())
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceFile.path))
+    }
+
+    func testVirtualAdjacentLocationDisablesCrossPaneTransfers() async throws {
+        let sourceDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: sourceDirectory) }
+        let sourceFile = sourceDirectory.appendingPathComponent("notes.txt")
+        try Data("notes".utf8).write(to: sourceFile)
+        let manager = LayoutManager()
+        let sourcePane = manager.rows[0].panes[0]
+        let targetPane = manager.rows[0].panes[1]
+        sourcePane.selectedTab.navigate(to: sourceDirectory)
+        targetPane.selectedTab.loadRecents()
+        manager.focusedPaneID = sourcePane.id
+        try await waitUntil { !sourcePane.selectedTab.isLoading }
+        sourcePane.selectedTab.selectedItems = [sourceFile.standardizedFileURL]
+
+        XCTAssertFalse(
+            manager.canTransferSelectionToAdjacentPane(from: sourcePane.id, operation: .copy)
+        )
+        XCTAssertFalse(
+            manager.canTransferSelectionToAdjacentPane(from: sourcePane.id, operation: .move)
+        )
+        XCTAssertFalse(manager.copySelectionToAdjacentPane())
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceFile.path))
+    }
+
+    func testMixedProtectedBatchIsRejectedWithoutMovingValidItems() async throws {
+        let sourceDirectory = try makeTemporaryDirectory()
+        let destinationDirectory = try makeTemporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: sourceDirectory)
+            try? FileManager.default.removeItem(at: destinationDirectory)
+        }
+        let sourceFile = sourceDirectory.appendingPathComponent("notes.txt")
+        try Data("notes".utf8).write(to: sourceFile)
+        let manager = LayoutManager()
+        let sourcePane = manager.rows[0].panes[0]
+        let targetPane = manager.rows[0].panes[1]
+        sourcePane.selectedTab.navigate(to: sourceDirectory)
+        targetPane.selectedTab.navigate(to: destinationDirectory)
+        try await waitUntil {
+            !sourcePane.selectedTab.isLoading && !targetPane.selectedTab.isLoading
+        }
+        let sources = [
+            sourceFile,
+            URL(fileURLWithPath: "/Applications", isDirectory: true)
+        ]
+
+        XCTAssertFalse(
+            manager.canTransferItemsToAdjacentPane(
+                sources,
+                from: sourcePane.id,
+                operation: .move
+            )
+        )
+        XCTAssertFalse(
+            manager.transferItemsToAdjacentPane(
+                sources,
+                from: sourcePane.id,
+                operation: .move
+            )
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceFile.path))
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: destinationDirectory.appendingPathComponent("notes.txt").path
+            )
+        )
+    }
+
     func testWorkspaceRoundTripPreservesTabsAndSelection() throws {
         let manager = LayoutManager()
         let pane = try XCTUnwrap(manager.focusedBrowserPane)
@@ -400,5 +583,19 @@ final class LayoutManagerTests: XCTestCase {
             .appendingPathComponent("LayoutManagerTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
         return url.standardizedFileURL
+    }
+
+    private func waitUntil(
+        timeout: TimeInterval = 3,
+        condition: @escaping @MainActor () -> Bool
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            if Date() >= deadline {
+                XCTFail("Condition was not met before timeout")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(25))
+        }
     }
 }

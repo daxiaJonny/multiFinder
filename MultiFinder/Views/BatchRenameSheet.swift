@@ -11,6 +11,14 @@ struct BatchRenameSheet: View {
         case sequence = "Sequence"
 
         var id: String { rawValue }
+
+        var localizedName: String {
+            switch self {
+            case .findReplace: return L10n.string("Replace Text")
+            case .addText: return L10n.string("Add Text")
+            case .sequence: return L10n.string("Sequence")
+            }
+        }
     }
 
     @State private var modeSelection: ModeSelection = .findReplace
@@ -30,14 +38,14 @@ struct BatchRenameSheet: View {
                 Image(systemName: "square.and.pencil")
                     .font(.title2)
                     .foregroundStyle(.secondary)
-                Text("Rename \(items.count) Items")
+                Text(L10n.format("Rename %lld Items", Int64(items.count)))
                     .font(.headline)
                 Spacer()
             }
 
             Picker("Mode", selection: $modeSelection) {
                 ForEach(ModeSelection.allCases) { selection in
-                    Text(selection.rawValue).tag(selection)
+                    Text(selection.localizedName).tag(selection)
                 }
             }
             .pickerStyle(.segmented)
@@ -98,9 +106,17 @@ struct BatchRenameSheet: View {
                 TextField("Format (use {n} for the number):", text: $sequenceFormat)
                     .textFieldStyle(.roundedBorder)
                 HStack {
-                    Stepper("Start at \(startNumber)", value: $startNumber, in: 0...9999)
+                    Stepper(
+                        L10n.format("Start at %lld", Int64(startNumber)),
+                        value: $startNumber,
+                        in: 0...9999
+                    )
                     Spacer()
-                    Stepper("Padding: \(numberPadding)", value: $numberPadding, in: 1...10)
+                    Stepper(
+                        L10n.format("Padding: %lld", Int64(numberPadding)),
+                        value: $numberPadding,
+                        in: 1...10
+                    )
                 }
                 .font(.system(size: 12))
             }
@@ -118,7 +134,7 @@ struct BatchRenameSheet: View {
                     Image(systemName: "arrow.right")
                         .font(.system(size: 9))
                         .foregroundStyle(.tertiary)
-                    Text(row.isNoOp ? "unchanged" : row.newName)
+                    Text(row.isNoOp ? L10n.string("unchanged") : row.newName)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .foregroundStyle(rowColor(for: row))
@@ -176,7 +192,11 @@ struct BatchRenameSheet: View {
     }
 
     private var summary: String {
-        "\(rows.filter(\.isRenamed).count) of \(items.count) will be renamed"
+        L10n.format(
+            "%lld of %lld will be renamed",
+            Int64(rows.filter(\.isRenamed).count),
+            Int64(items.count)
+        )
     }
 
     private func apply() {

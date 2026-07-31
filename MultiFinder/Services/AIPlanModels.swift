@@ -41,7 +41,7 @@ struct AIPlan: Codable, Sendable, Equatable {
             guard let kind = Kind(rawValue: raw) else {
                 throw DecodingError.dataCorrupted(DecodingError.Context(
                     codingPath: decoder.codingPath,
-                    debugDescription: "不支持“\(raw)”类型的方案。"
+                    debugDescription: L10n.format("The plan type “%@” is not supported.", raw)
                 ))
             }
             self = kind
@@ -133,7 +133,10 @@ struct AISearchCriteria: Codable, Sendable, Hashable {
             throw DecodingError.dataCorruptedError(
                 forKey: key,
                 in: container,
-                debugDescription: "日期“\(string)”不是有效的 ISO 日期（应为 YYYY-MM-DD）。"
+                debugDescription: L10n.format(
+                    "“%@” is not a valid ISO date (expected YYYY-MM-DD).",
+                    string
+                )
             )
         }
         return date
@@ -188,7 +191,7 @@ enum AIPlanOperation: Codable, Sendable, Hashable {
             throw DecodingError.dataCorruptedError(
                 forKey: .op,
                 in: container,
-                debugDescription: "不支持“\(op)”操作。"
+                debugDescription: L10n.format("The operation “%@” is not supported.", op)
             )
         }
     }
@@ -226,17 +229,23 @@ extension AIPlan {
         } catch let error as DecodingError {
             throw AIPlanParseError(message: message(for: error))
         } catch {
-            throw AIPlanParseError(message: "无法读取 AI 方案：\(error.localizedDescription)")
+            throw AIPlanParseError(
+                message: L10n.format("Could not read the AI plan: %@", error.localizedDescription)
+            )
         }
 
         switch plan.kind {
         case .search:
             guard plan.search != nil else {
-                throw AIPlanParseError(message: "搜索方案缺少“search”条件。")
+                throw AIPlanParseError(
+                    message: L10n.string("The search plan is missing its search criteria.")
+                )
             }
         case .organize:
             guard let operations = plan.operations, !operations.isEmpty else {
-                throw AIPlanParseError(message: "整理方案中没有任何操作。")
+                throw AIPlanParseError(
+                    message: L10n.string("The organize plan does not contain any operations.")
+                )
             }
         }
         return plan
@@ -244,7 +253,9 @@ extension AIPlan {
 
     private static func extractJSONObject(from text: String) throws -> String {
         guard let start = text.firstIndex(of: "{") else {
-            throw AIPlanParseError(message: "AI 返回的内容中没有 JSON 方案。")
+            throw AIPlanParseError(
+                message: L10n.string("The AI response does not contain a JSON plan.")
+            )
         }
         var depth = 0
         var inString = false
@@ -277,23 +288,34 @@ extension AIPlan {
             }
             index = text.index(after: index)
         }
-        throw AIPlanParseError(message: "AI 返回的 JSON 方案不完整。")
+        throw AIPlanParseError(
+            message: L10n.string("The JSON plan returned by AI is incomplete.")
+        )
     }
 
     private static func message(for error: DecodingError) -> String {
         switch error {
         case .keyNotFound(let key, let context):
-            return "方案缺少必填字段“\(fieldPath(context.codingPath, key))”。"
+            return L10n.format(
+                "The plan is missing the required field “%@”.",
+                fieldPath(context.codingPath, key)
+            )
         case .valueNotFound(_, let context):
-            return "方案字段“\(fieldPath(context.codingPath))”没有值。"
+            return L10n.format(
+                "The plan field “%@” does not have a value.",
+                fieldPath(context.codingPath)
+            )
         case .typeMismatch(_, let context):
-            return "方案字段“\(fieldPath(context.codingPath))”的类型不正确。"
+            return L10n.format(
+                "The plan field “%@” has the wrong type.",
+                fieldPath(context.codingPath)
+            )
         case .dataCorrupted(let context):
             return context.debugDescription.isEmpty
-                ? "AI 返回的内容不是有效的 JSON。"
+                ? L10n.string("The AI response is not valid JSON.")
                 : context.debugDescription
         @unknown default:
-            return "无法读取 AI 方案。"
+            return L10n.string("Could not read the AI plan.")
         }
     }
 

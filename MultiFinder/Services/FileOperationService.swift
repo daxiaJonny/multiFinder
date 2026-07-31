@@ -26,6 +26,20 @@ enum FileOperationKind: String, Sendable {
     case compress = "Compress"
     case extract = "Extract"
     case aiOrganize = "AI Organize"
+
+    var localizedName: String {
+        switch self {
+        case .copy: return L10n.string("Copy")
+        case .move: return L10n.string("Move")
+        case .trash: return L10n.string("Move to Trash")
+        case .rename: return L10n.string("Rename")
+        case .createFolder: return L10n.string("New Folder")
+        case .batchRename: return L10n.string("Batch Rename")
+        case .compress: return L10n.string("Compress")
+        case .extract: return L10n.string("Extract")
+        case .aiOrganize: return L10n.string("AI Organize")
+        }
+    }
 }
 
 struct BatchRenamePair: Hashable, Sendable {
@@ -39,6 +53,16 @@ enum FileOperationStatus: String, Sendable {
     case failed
     case cancelled
     case undone
+
+    var localizedName: String {
+        switch self {
+        case .completed: return L10n.string("Completed")
+        case .partial: return L10n.string("Partially Completed")
+        case .failed: return L10n.string("Failed")
+        case .cancelled: return L10n.string("Cancelled")
+        case .undone: return L10n.string("Undone")
+        }
+    }
 }
 
 enum FileItemOperationStatus: String, Sendable {
@@ -357,7 +381,7 @@ final class FileOperationService: ObservableObject {
 
     func createFolder(
         in parent: URL,
-        baseName: String = "untitled folder",
+        baseName: String = L10n.string("untitled folder"),
         completion: ((Result<Void, FileOperationError>) -> Void)? = nil
     ) {
         enqueue(
@@ -368,7 +392,7 @@ final class FileOperationService: ObservableObject {
 
     func createFolderDetailed(
         in parent: URL,
-        baseName: String = "untitled folder",
+        baseName: String = L10n.string("untitled folder"),
         completion: ((FileOperationResult) -> Void)? = nil
     ) {
         enqueue(.createFolder(parent: parent, baseName: baseName), completion: completion)
@@ -445,7 +469,13 @@ final class FileOperationService: ObservableObject {
                 redoStack.append(record)
             } catch {
                 undoStack.append(record)
-                history.insert(Self.failureRecord(for: record.request, message: "Undo failed: \(error.localizedDescription)"), at: 0)
+                history.insert(
+                    Self.failureRecord(
+                        for: record.request,
+                        message: L10n.format("Undo failed: %@", error.localizedDescription)
+                    ),
+                    at: 0
+                )
             }
             activeOperation = nil
             activeTask = nil
@@ -459,13 +489,13 @@ final class FileOperationService: ObservableObject {
 
     nonisolated static func validationError(forFileName name: String) -> String? {
         if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "A file name cannot be empty."
+            return L10n.string("A file name cannot be empty.")
         }
         if name == "." || name == ".." {
-            return "“\(name)” is reserved and cannot be used as a file name."
+            return L10n.format("“%@” is reserved and cannot be used as a file name.", name)
         }
         if name.contains("/") || name.unicodeScalars.contains("\0") {
-            return "File names cannot contain “/” or a null character."
+            return L10n.string("File names cannot contain “/” or a null character.")
         }
         return nil
     }
@@ -496,10 +526,12 @@ final class FileOperationService: ObservableObject {
         var counter = 1
 
         while true {
-            let suffix = counter == 1 ? " copy" : " copy \(counter)"
+            let copiedBaseName = counter == 1
+                ? L10n.format("%@ copy", baseName)
+                : L10n.format("%@ copy %lld", baseName, Int64(counter))
             let candidateName = fileExtension.isEmpty
-                ? "\(baseName)\(suffix)"
-                : "\(baseName)\(suffix).\(fileExtension)"
+                ? copiedBaseName
+                : "\(copiedBaseName).\(fileExtension)"
             let candidate = directory.appendingPathComponent(candidateName)
             if !fileManager.fileExists(atPath: candidate.path) {
                 return candidate
@@ -580,7 +612,7 @@ final class FileOperationService: ObservableObject {
                 completion(.success(()))
             } else {
                 completion(.failure(FileOperationError(
-                    message: result.errorMessage ?? "The operation did not complete."
+                    message: result.errorMessage ?? L10n.string("The operation did not complete.")
                 )))
             }
         }
@@ -636,14 +668,14 @@ final class FileOperationService: ObservableObject {
                     source: source,
                     destination: nil,
                     status: .cancelled,
-                    errorMessage: "The operation was cancelled."
+                    errorMessage: L10n.string("The operation was cancelled.")
                 ))
                 outcomes.append(contentsOf: sources.dropFirst(index + 1).map { remainingSource in
                     FileItemOperationOutcome(
                         source: remainingSource,
                         destination: nil,
                         status: .cancelled,
-                        errorMessage: "The operation was cancelled before this item started."
+                        errorMessage: L10n.string("The operation was cancelled before this item started.")
                     )
                 })
                 wasCancelled = true
@@ -693,14 +725,14 @@ final class FileOperationService: ObservableObject {
                     source: url,
                     destination: nil,
                     status: .cancelled,
-                    errorMessage: "The operation was cancelled."
+                    errorMessage: L10n.string("The operation was cancelled.")
                 ))
                 outcomes.append(contentsOf: urls.dropFirst(index + 1).map { remainingURL in
                     FileItemOperationOutcome(
                         source: remainingURL,
                         destination: nil,
                         status: .cancelled,
-                        errorMessage: "The operation was cancelled before this item started."
+                        errorMessage: L10n.string("The operation was cancelled before this item started.")
                     )
                 })
                 wasCancelled = true
@@ -750,7 +782,7 @@ final class FileOperationService: ObservableObject {
                     source: source,
                     destination: nil,
                     status: .cancelled,
-                    errorMessage: "The operation was cancelled."
+                    errorMessage: L10n.string("The operation was cancelled.")
                 )],
                 wasCancelled: true
             )
@@ -798,7 +830,7 @@ final class FileOperationService: ObservableObject {
                     source: parent,
                     destination: nil,
                     status: .cancelled,
-                    errorMessage: "The operation was cancelled."
+                    errorMessage: L10n.string("The operation was cancelled.")
                 )],
                 wasCancelled: true
             )
@@ -837,14 +869,14 @@ final class FileOperationService: ObservableObject {
                     source: pair.source,
                     destination: nil,
                     status: .cancelled,
-                    errorMessage: "The operation was cancelled."
+                    errorMessage: L10n.string("The operation was cancelled.")
                 ))
                 outcomes.append(contentsOf: pairs.dropFirst(index + 1).map { remainingPair in
                     FileItemOperationOutcome(
                         source: remainingPair.source,
                         destination: nil,
                         status: .cancelled,
-                        errorMessage: "The operation was cancelled before this item started."
+                        errorMessage: L10n.string("The operation was cancelled before this item started.")
                     )
                 })
                 wasCancelled = true
@@ -887,7 +919,7 @@ final class FileOperationService: ObservableObject {
                     source: firstSource,
                     destination: nil,
                     status: .cancelled,
-                    errorMessage: "The operation was cancelled."
+                    errorMessage: L10n.string("The operation was cancelled.")
                 )],
                 wasCancelled: true
             )
@@ -926,14 +958,14 @@ final class FileOperationService: ObservableObject {
                     source: archive,
                     destination: nil,
                     status: .cancelled,
-                    errorMessage: "The operation was cancelled."
+                    errorMessage: L10n.string("The operation was cancelled.")
                 ))
                 outcomes.append(contentsOf: archives.dropFirst(index + 1).map { remainingArchive in
                     FileItemOperationOutcome(
                         source: remainingArchive,
                         destination: nil,
                         status: .cancelled,
-                        errorMessage: "The operation was cancelled before this item started."
+                        errorMessage: L10n.string("The operation was cancelled before this item started.")
                     )
                 })
                 wasCancelled = true
@@ -975,14 +1007,14 @@ final class FileOperationService: ObservableObject {
                     source: source,
                     destination: nil,
                     status: .cancelled,
-                    errorMessage: "The operation was cancelled."
+                    errorMessage: L10n.string("The operation was cancelled.")
                 ))
                 outcomes.append(contentsOf: operations.dropFirst(index + 1).map { remainingOperation in
                     FileItemOperationOutcome(
                         source: Self.aiOperationSource(remainingOperation, scopeRoot: scopeRoot),
                         destination: nil,
                         status: .cancelled,
-                        errorMessage: "The operation was cancelled before this item started."
+                        errorMessage: L10n.string("The operation was cancelled before this item started.")
                     )
                 })
                 wasCancelled = true
@@ -1032,7 +1064,10 @@ final class FileOperationService: ObservableObject {
                 let destinationURL = resolve(destination)
                 guard !fileManager.fileExists(atPath: destinationURL.path) else {
                     throw FileOperationError(
-                        message: "An item named “\(destinationURL.lastPathComponent)” already exists."
+                        message: L10n.format(
+                            "An item named “%@” already exists.",
+                            destinationURL.lastPathComponent
+                        )
                     )
                 }
                 try fileManager.moveItem(at: sourceURL, to: destinationURL)
@@ -1042,7 +1077,10 @@ final class FileOperationService: ObservableObject {
                 let destinationURL = resolve(destination)
                 guard !fileManager.fileExists(atPath: destinationURL.path) else {
                     throw FileOperationError(
-                        message: "An item named “\(destinationURL.lastPathComponent)” already exists."
+                        message: L10n.format(
+                            "An item named “%@” already exists.",
+                            destinationURL.lastPathComponent
+                        )
                     )
                 }
                 try copyItemCancellable(from: sourceURL, to: destinationURL, fileManager: fileManager)
@@ -1052,7 +1090,9 @@ final class FileOperationService: ObservableObject {
                 let destinationURL = sourceURL.deletingLastPathComponent().appendingPathComponent(newName)
                 if sourceURL.path.caseInsensitiveCompare(destinationURL.path) != .orderedSame,
                    fileManager.fileExists(atPath: destinationURL.path) {
-                    throw FileOperationError(message: "An item named “\(newName)” already exists.")
+                    throw FileOperationError(
+                        message: L10n.format("An item named “%@” already exists.", newName)
+                    )
                 }
                 try fileManager.moveItem(at: sourceURL, to: destinationURL)
                 return .moved(from: sourceURL, to: destinationURL, identity: try fileIdentity(at: destinationURL))
@@ -1074,17 +1114,17 @@ final class FileOperationService: ObservableObject {
 
         if wasCancelled || outcomes.contains(where: { $0.status == .cancelled }) {
             status = .cancelled
-            errorMessage = "The operation was cancelled."
+            errorMessage = L10n.string("The operation was cancelled.")
         } else if !failed.isEmpty {
             status = .failed
             errorMessage = failed.count == 1
                 ? failed[0].errorMessage
-                : "\(failed.count) items could not be processed."
+                : L10n.format("%lld items could not be processed.", Int64(failed.count))
         } else if !skipped.isEmpty {
             status = .partial
             errorMessage = skipped.count == 1
-                ? "One item was skipped."
-                : "\(skipped.count) items were skipped."
+                ? L10n.string("One item was skipped.")
+                : L10n.format("%lld items were skipped.", Int64(skipped.count))
         } else {
             status = .completed
             errorMessage = nil
@@ -1213,7 +1253,12 @@ final class FileOperationService: ObservableObject {
         var resultingURL: NSURL?
         try fileManager.trashItem(at: url, resultingItemURL: &resultingURL)
         guard let trashedURL = resultingURL as URL? else {
-            throw FileOperationError(message: "The Trash did not return a location for \(url.lastPathComponent).")
+            throw FileOperationError(
+                message: L10n.format(
+                    "The Trash did not return a location for %@.",
+                    url.lastPathComponent
+                )
+            )
         }
         return .trashed(original: url, trashed: trashedURL, identity: identity)
     }
@@ -1241,7 +1286,10 @@ final class FileOperationService: ObservableObject {
             if source.path.caseInsensitiveCompare(destination.path) != .orderedSame,
                fileManager.fileExists(atPath: destination.path) {
                 throw FileOperationError(
-                    message: "An item named “\(destination.lastPathComponent)” already exists."
+                    message: L10n.format(
+                        "An item named “%@” already exists.",
+                        destination.lastPathComponent
+                    )
                 )
             }
             try fileManager.moveItem(at: source, to: destination)
@@ -1253,7 +1301,7 @@ final class FileOperationService: ObservableObject {
         try await runWorker {
             let fileManager = FileManager.default
             guard let firstSource = sources.first else {
-                throw FileOperationError(message: "There is nothing to compress.")
+                throw FileOperationError(message: L10n.string("There is nothing to compress."))
             }
             let directory = firstSource.deletingLastPathComponent()
             let staging = directory.appendingPathComponent(".multifinder-compress-\(UUID().uuidString).zip")
@@ -1270,7 +1318,9 @@ final class FileOperationService: ObservableObject {
                 )
             } else {
                 guard sources.allSatisfy({ $0.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL }) else {
-                    throw FileOperationError(message: "Items can only be compressed together from the same folder.")
+                    throw FileOperationError(
+                        message: L10n.string("Items can only be compressed together from the same folder.")
+                    )
                 }
                 try runProcess(
                     "/usr/bin/zip",
@@ -1280,7 +1330,9 @@ final class FileOperationService: ObservableObject {
             }
 
             try Task.checkCancellation()
-            let baseName = sources.count == 1 ? firstSource.lastPathComponent : "Archive"
+            let baseName = sources.count == 1
+                ? firstSource.lastPathComponent
+                : L10n.string("Archive")
             let destination = uniqueNumberedDestination(
                 in: directory,
                 baseName: baseName,
@@ -1312,15 +1364,21 @@ final class FileOperationService: ObservableObject {
                 try runProcess("/usr/bin/tar", arguments: ["-xf", archive.path, "-C", staging.path])
             } else if lowercased.hasSuffix(".gz") {
                 let outputName = String(name.dropLast(3))
-                let outputURL = staging.appendingPathComponent(outputName.isEmpty ? "extracted" : outputName)
+                let outputURL = staging.appendingPathComponent(
+                    outputName.isEmpty ? L10n.string("extracted") : outputName
+                )
                 guard fileManager.createFile(atPath: outputURL.path, contents: nil) else {
-                    throw FileOperationError(message: "Could not create \(outputURL.lastPathComponent).")
+                    throw FileOperationError(
+                        message: L10n.format("Could not create %@.", outputURL.lastPathComponent)
+                    )
                 }
                 let output = try FileHandle(forWritingTo: outputURL)
                 defer { try? output.close() }
                 try runProcess("/usr/bin/gunzip", arguments: ["-c", archive.path], standardOutput: output)
             } else {
-                throw FileOperationError(message: "“\(name)” is not a supported archive.")
+                throw FileOperationError(
+                    message: L10n.format("“%@” is not a supported archive.", name)
+                )
             }
 
             try Task.checkCancellation()
@@ -1386,8 +1444,10 @@ final class FileOperationService: ObservableObject {
             let toolMessage = String(data: errorData, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let toolName = (launchPath as NSString).lastPathComponent
-            let detail = toolMessage.isEmpty ? "exit code \(process.terminationStatus)" : toolMessage
-            throw FileOperationError(message: "\(toolName) failed: \(detail)")
+            let detail = toolMessage.isEmpty
+                ? L10n.format("exit code %lld", Int64(process.terminationStatus))
+                : toolMessage
+            throw FileOperationError(message: L10n.format("%@ failed: %@", toolName, detail))
         }
     }
 
@@ -1414,7 +1474,12 @@ final class FileOperationService: ObservableObject {
                         throw identityMismatchError(at: to)
                     }
                     if try fileIdentityIfPresent(at: from) != nil {
-                        throw FileOperationError(message: "Cannot restore \(from.lastPathComponent) because an item already exists there.")
+                        throw FileOperationError(
+                            message: L10n.format(
+                                "Cannot restore %@ because an item already exists there.",
+                                from.lastPathComponent
+                            )
+                        )
                     }
                     try fileManager.moveItem(at: to, to: from)
                 case .trashed(let original, let trashed, let expectedIdentity):
@@ -1426,7 +1491,12 @@ final class FileOperationService: ObservableObject {
                         throw identityMismatchError(at: trashed)
                     }
                     if try fileIdentityIfPresent(at: original) != nil {
-                        throw FileOperationError(message: "Cannot restore \(original.lastPathComponent) because an item already exists there.")
+                        throw FileOperationError(
+                            message: L10n.format(
+                                "Cannot restore %@ because an item already exists there.",
+                                original.lastPathComponent
+                            )
+                        )
                     }
                     try fileManager.moveItem(at: trashed, to: original)
                 }
@@ -1590,14 +1660,23 @@ final class FileOperationService: ObservableObject {
             }
             let recoveryMessage = recoveryChanges.isEmpty
                 ? ""
-                : " The original item remains recoverable at \(backupURL.path)."
+                : L10n.format(
+                    " The original item remains recoverable at %@.",
+                    backupURL.path
+                )
             throw WorkerFailure(
-                message: "Replacement failed: \(error.localizedDescription).\(recoveryMessage)",
+                message: L10n.format(
+                    "Replacement failed: %@.%@",
+                    error.localizedDescription,
+                    recoveryMessage
+                ),
                 changes: recoveryChanges
             )
         }
         guard let installedIdentity else {
-            throw FileOperationError(message: "The installed item could not be identified.")
+            throw FileOperationError(
+                message: L10n.string("The installed item could not be identified.")
+            )
         }
 
         let displacedChange = storeDisplacedItem(
@@ -1719,7 +1798,9 @@ final class FileOperationService: ObservableObject {
 
         case .typeRegular:
             guard fileManager.createFile(atPath: destination.path, contents: nil) else {
-                throw FileOperationError(message: "Could not create \(destination.lastPathComponent).")
+                throw FileOperationError(
+                    message: L10n.format("Could not create %@.", destination.lastPathComponent)
+                )
             }
             let input = try FileHandle(forReadingFrom: source)
             let output = try FileHandle(forWritingTo: destination)
@@ -1803,13 +1884,19 @@ final class FileOperationService: ObservableObject {
 
     private nonisolated static func identityMismatchError(at url: URL) -> FileOperationError {
         FileOperationError(
-            message: "Cannot undo \(url.lastPathComponent) because it is no longer the item created by this operation."
+            message: L10n.format(
+                "Cannot undo %@ because it is no longer the item created by this operation.",
+                url.lastPathComponent
+            )
         )
     }
 
     private nonisolated static func missingUndoItemError(at url: URL) -> FileOperationError {
         FileOperationError(
-            message: "Cannot undo because \(url.lastPathComponent) is no longer available."
+            message: L10n.format(
+                "Cannot undo because %@ is no longer available.",
+                url.lastPathComponent
+            )
         )
     }
 

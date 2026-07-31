@@ -32,16 +32,19 @@ final class FileOperationServiceTests: XCTestCase {
 
     func testKeepBothGeneratesCopyTwoAndCopyThree() async throws {
         let source = sourceDirectory.appendingPathComponent("report.txt")
+        let firstCopyName = localizedCopyName(baseName: "report", fileExtension: "txt")
+        let secondCopyName = localizedCopyName(baseName: "report", copyNumber: 2, fileExtension: "txt")
+        let thirdCopyName = localizedCopyName(baseName: "report", copyNumber: 3, fileExtension: "txt")
         try Data("source".utf8).write(to: source)
         try Data("existing".utf8).write(to: destinationDirectory.appendingPathComponent("report.txt"))
-        try Data("copy".utf8).write(to: destinationDirectory.appendingPathComponent("report copy.txt"))
-        try Data("copy 2".utf8).write(to: destinationDirectory.appendingPathComponent("report copy 2.txt"))
+        try Data("copy".utf8).write(to: destinationDirectory.appendingPathComponent(firstCopyName))
+        try Data("copy 2".utf8).write(to: destinationDirectory.appendingPathComponent(secondCopyName))
 
         try await perform { completion in
             service.copy([source], to: destinationDirectory, conflictPolicy: .keepBoth, completion: completion)
         }
 
-        let generated = destinationDirectory.appendingPathComponent("report copy 3.txt")
+        let generated = destinationDirectory.appendingPathComponent(thirdCopyName)
         XCTAssertTrue(FileManager.default.fileExists(atPath: generated.path))
         XCTAssertEqual(try String(contentsOf: generated), "source")
     }
@@ -109,7 +112,9 @@ final class FileOperationServiceTests: XCTestCase {
     func testRenameKeepBothUsesProposedNameAndReportsActualDestination() async throws {
         let source = sourceDirectory.appendingPathComponent("draft.txt")
         let proposedDestination = sourceDirectory.appendingPathComponent("final.txt")
-        let actualDestination = sourceDirectory.appendingPathComponent("final copy.txt")
+        let actualDestination = sourceDirectory.appendingPathComponent(
+            localizedCopyName(baseName: "final", fileExtension: "txt")
+        )
         try Data("draft".utf8).write(to: source)
         try Data("existing".utf8).write(to: proposedDestination)
 
@@ -264,13 +269,17 @@ final class FileOperationServiceTests: XCTestCase {
             atPath: destinationDirectory.appendingPathComponent("missing.txt").path
         ))
         XCTAssertFalse(FileManager.default.fileExists(
-            atPath: destinationDirectory.appendingPathComponent("first copy.txt").path
+            atPath: destinationDirectory.appendingPathComponent(
+                localizedCopyName(baseName: "first", fileExtension: "txt")
+            ).path
         ))
     }
 
     func testCopyIntoSameDirectoryCreatesAUniqueCopy() async throws {
         let source = sourceDirectory.appendingPathComponent("notes.txt")
-        let expectedCopy = sourceDirectory.appendingPathComponent("notes copy.txt")
+        let expectedCopy = sourceDirectory.appendingPathComponent(
+            localizedCopyName(baseName: "notes", fileExtension: "txt")
+        )
         try Data("notes".utf8).write(to: source)
 
         let result = await performDetailed { completion in
@@ -462,6 +471,17 @@ final class FileOperationServiceTests: XCTestCase {
             }
             try await Task.sleep(for: .milliseconds(20))
         }
+    }
+
+    private func localizedCopyName(
+        baseName: String,
+        copyNumber: Int = 1,
+        fileExtension: String
+    ) -> String {
+        let copiedBaseName = copyNumber == 1
+            ? L10n.format("%@ copy", baseName)
+            : L10n.format("%@ copy %lld", baseName, Int64(copyNumber))
+        return "\(copiedBaseName).\(fileExtension)"
     }
 
     private func fileInode(at url: URL) throws -> UInt64 {

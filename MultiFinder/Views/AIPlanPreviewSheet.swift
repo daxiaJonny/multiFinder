@@ -44,13 +44,13 @@ struct AIPlanPreviewSheet: View {
             }
 
             HStack {
-                Button("取消") { dismiss() }
+                Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Spacer()
                 Text(summary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Button("执行 \(includedIndices.count) 项操作") {
+                Button(L10n.format("Run %lld Operations", Int64(includedIndices.count))) {
                     run()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -70,6 +70,7 @@ struct AIPlanPreviewSheet: View {
             Toggle("", isOn: inclusionBinding(for: row.id))
                 .toggleStyle(.checkbox)
                 .labelsHidden()
+                .accessibilityLabel("Include Operation")
 
             Image(systemName: symbolName(for: row.operation))
                 .font(.system(size: 12))
@@ -188,7 +189,11 @@ struct AIPlanPreviewSheet: View {
     }
 
     private var summary: String {
-        "已选择 \(includedIndices.count) / \(operations.count) 项"
+        L10n.format(
+            "%lld of %lld selected",
+            Int64(includedIndices.count),
+            Int64(operations.count)
+        )
     }
 
     private func run() {

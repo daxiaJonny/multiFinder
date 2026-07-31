@@ -22,17 +22,17 @@ enum BatchRenameEngine {
         switch mode {
         case .findReplace(let find, _, let useRegex, let caseSensitive):
             if useRegex, !find.isEmpty, regularExpression(for: find, caseSensitive: caseSensitive) == nil {
-                return "The regular expression is invalid."
+                return L10n.string("The regular expression is invalid.")
             }
             return nil
         case .addText:
             return nil
         case .sequence(_, let start, let padding):
             if start < 0 {
-                return "The start number cannot be negative."
+                return L10n.string("The start number cannot be negative.")
             }
             if !(1...10).contains(padding) {
-                return "Padding must be between 1 and 10 digits."
+                return L10n.string("Padding must be between 1 and 10 digits.")
             }
             return nil
         }
@@ -97,10 +97,10 @@ enum BatchRenameEngine {
             } else if let validationError = FileOperationService.validationError(forFileName: newName) {
                 issue = validationError
             } else if targetCounts[newName.lowercased(), default: 0] > 1 {
-                issue = "Multiple items would be renamed to “\(newName)”."
+                issue = L10n.format("Multiple items would be renamed to “%@”.", newName)
             } else if lowercasedExisting.contains(newName.lowercased()),
                       newName.lowercased() != originalName.lowercased() {
-                issue = "An item named “\(newName)” already exists."
+                issue = L10n.format("An item named “%@” already exists.", newName)
             } else {
                 issue = nil
             }

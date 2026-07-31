@@ -2,6 +2,7 @@ import Foundation
 import XCTest
 @testable import MultiFinder
 
+@MainActor
 final class ExternalIntegrationTests: XCTestCase {
     func testExternalOpenRequestRoundTripsEncodedPath() throws {
         let target = URL(fileURLWithPath: "/tmp/MultiFinder/A & B")
@@ -17,13 +18,37 @@ final class ExternalIntegrationTests: XCTestCase {
         XCTAssertNil(ExternalOpenRequest(url: URL(string: "multifinder://open")!))
     }
 
-    func testITermScriptEscapesPathAndCreatesATab() {
-        let script = ITermService.script(forPath: #"/tmp/A "Quoted"\Folder"#)
+    func testTerminalChoicesHaveExpectedBundleIdentifiers() {
+        XCTAssertEqual(PreferredTerminalApplication.terminal.bundleIdentifier, "com.apple.Terminal")
+        XCTAssertEqual(PreferredTerminalApplication.iTerm2.bundleIdentifier, "com.googlecode.iterm2")
+        XCTAssertEqual(PreferredTerminalApplication.warp.bundleIdentifier, "dev.warp.Warp-Stable")
+    }
 
-        XCTAssertTrue(script.contains(#"\"Quoted\""#))
-        XCTAssertTrue(script.contains(#"\\Folder"#))
-        XCTAssertTrue(script.contains("create tab with default profile"))
-        XCTAssertTrue(script.contains("quoted form of targetPath"))
-        XCTAssertTrue(script.contains(ITermService.bundleIdentifier))
+    func testTerminalLaunchArgumentsPreserveApplicationAndDirectoryPaths() {
+        let applicationURL = URL(fileURLWithPath: "/Applications/Terminal With Spaces.app")
+        let directoryURL = URL(fileURLWithPath: #"/tmp/A "Quoted"\Folder"#)
+
+        let arguments = TerminalService.launchArguments(
+            applicationURL: applicationURL,
+            directoryURL: directoryURL
+        )
+
+        XCTAssertEqual(arguments, ["-a", applicationURL.path, directoryURL.path])
+    }
+
+    func testTerminalServiceReadsUpdatedSelectionWithoutRecreation() throws {
+        let suiteName = "ExternalIntegrationTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let settings = AppSettings(userDefaults: defaults)
+        let service = TerminalService(settings: settings)
+
+        settings.preferredTerminalApplication = .terminal
+        XCTAssertEqual(service.selectedApplication, .terminal)
+        XCTAssertEqual(service.applicationName, L10n.string("Terminal"))
+
+        settings.preferredTerminalApplication = .warp
+        XCTAssertEqual(service.selectedApplication, .warp)
+        XCTAssertEqual(service.applicationName, "Warp")
     }
 }

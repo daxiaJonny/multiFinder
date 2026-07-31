@@ -34,7 +34,7 @@ struct FileItem: Identifiable, Hashable, Sendable {
         self.isPackage = values?.isPackage ?? false
 
         if self.isDirectory {
-            self.kind = self.isPackage ? "Package" : "Folder"
+            self.kind = self.isPackage ? L10n.string("Package") : L10n.string("Folder")
         } else {
             self.kind = Self.fileKind(for: standardizedURL.pathExtension)
         }
@@ -42,50 +42,52 @@ struct FileItem: Identifiable, Hashable, Sendable {
 
     static func fileKind(for ext: String) -> String {
         switch ext.lowercased() {
-        case "swift": return "Swift File"
-        case "js": return "JavaScript File"
-        case "ts": return "TypeScript File"
-        case "py": return "Python File"
-        case "html", "htm": return "HTML File"
-        case "css": return "CSS File"
-        case "json": return "JSON File"
-        case "xml": return "XML File"
-        case "md": return "Markdown File"
-        case "txt": return "Text File"
-        case "pdf": return "PDF Document"
-        case "png": return "PNG Image"
-        case "jpg", "jpeg": return "JPEG Image"
-        case "gif": return "GIF Image"
-        case "svg": return "SVG Image"
-        case "webp": return "WebP Image"
-        case "mp3", "aac", "wav", "flac": return "Audio File"
-        case "mp4", "mov", "avi", "mkv": return "Video File"
-        case "zip", "tar", "gz", "rar", "7z": return "Archive"
-        case "dmg": return "Disk Image"
-        case "app": return "Application"
-        case "sh", "bash", "zsh": return "Shell Script"
-        case "c": return "C File"
-        case "cpp", "cc", "cxx": return "C++ File"
-        case "h", "hpp": return "Header File"
-        case "java": return "Java File"
-        case "rs": return "Rust File"
-        case "go": return "Go File"
-        case "rb": return "Ruby File"
-        case "php": return "PHP File"
-        case "yml", "yaml": return "YAML File"
-        case "toml": return "TOML File"
-        case "csv": return "CSV File"
-        case "doc", "docx": return "Word Document"
-        case "xls", "xlsx": return "Excel Spreadsheet"
-        case "ppt", "pptx": return "PowerPoint"
-        case "sql": return "SQL File"
-        case "r": return "R File"
-        case "lua": return "Lua File"
-        case "dart": return "Dart File"
-        case "kt": return "Kotlin File"
-        case "vue": return "Vue File"
-        case "jsx", "tsx": return "React File"
-        default: return ext.isEmpty ? "File" : "\(ext.uppercased()) File"
+        case "swift": return L10n.string("Swift File")
+        case "js": return L10n.string("JavaScript File")
+        case "ts": return L10n.string("TypeScript File")
+        case "py": return L10n.string("Python File")
+        case "html", "htm": return L10n.string("HTML File")
+        case "css": return L10n.string("CSS File")
+        case "json": return L10n.string("JSON File")
+        case "xml": return L10n.string("XML File")
+        case "md": return L10n.string("Markdown File")
+        case "txt": return L10n.string("Text File")
+        case "pdf": return L10n.string("PDF Document")
+        case "png": return L10n.string("PNG Image")
+        case "jpg", "jpeg": return L10n.string("JPEG Image")
+        case "gif": return L10n.string("GIF Image")
+        case "svg": return L10n.string("SVG Image")
+        case "webp": return L10n.string("WebP Image")
+        case "mp3", "aac", "wav", "flac": return L10n.string("Audio File")
+        case "mp4", "mov", "avi", "mkv": return L10n.string("Video File")
+        case "zip", "tar", "gz", "rar", "7z": return L10n.string("Archive File")
+        case "dmg": return L10n.string("Disk Image")
+        case "app": return L10n.string("Application")
+        case "sh", "bash", "zsh": return L10n.string("Shell Script")
+        case "c": return L10n.string("C File")
+        case "cpp", "cc", "cxx": return L10n.string("C++ File")
+        case "h", "hpp": return L10n.string("Header File")
+        case "java": return L10n.string("Java File")
+        case "rs": return L10n.string("Rust File")
+        case "go": return L10n.string("Go File")
+        case "rb": return L10n.string("Ruby File")
+        case "php": return L10n.string("PHP File")
+        case "yml", "yaml": return L10n.string("YAML File")
+        case "toml": return L10n.string("TOML File")
+        case "csv": return L10n.string("CSV File")
+        case "doc", "docx": return L10n.string("Word Document")
+        case "xls", "xlsx": return L10n.string("Excel Spreadsheet")
+        case "ppt", "pptx": return L10n.string("PowerPoint Presentation")
+        case "sql": return L10n.string("SQL File")
+        case "r": return L10n.string("R File")
+        case "lua": return L10n.string("Lua File")
+        case "dart": return L10n.string("Dart File")
+        case "kt": return L10n.string("Kotlin File")
+        case "vue": return L10n.string("Vue File")
+        case "jsx", "tsx": return L10n.string("React File")
+        default: return ext.isEmpty
+            ? L10n.string("File")
+            : L10n.format("%@ File", ext.uppercased())
         }
     }
 

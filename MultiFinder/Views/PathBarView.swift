@@ -149,11 +149,13 @@ struct PathBarView: View {
                 Image(systemName: "arrow.right.circle.fill")
             }
             .buttonStyle(.plain)
+            .help("Open Path")
             Button(action: { isEditing = false }) {
                 Image(systemName: "xmark.circle.fill")
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
+            .help("Cancel Editing")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)

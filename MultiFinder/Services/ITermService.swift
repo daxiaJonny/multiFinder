@@ -1,85 +1,145 @@
 import AppKit
 import Foundation
 
-enum ITermServiceError: LocalizedError {
-    case notInstalled
+enum TerminalServiceError: LocalizedError {
+    case notInstalled(String)
     case invalidDirectory
-    case scriptFailed(String)
+    case launchFailed(String, String)
 
     var errorDescription: String? {
         switch self {
-        case .notInstalled:
-            return "iTerm2 is not installed."
+        case .notInstalled(let applicationName):
+            return L10n.format("%@ is not installed.", applicationName)
         case .invalidDirectory:
-            return "The current path is not an available directory."
-        case .scriptFailed(let message):
-            return "Could not open the path in iTerm2: \(message)"
+            return L10n.string("The current path is not an available directory.")
+        case .launchFailed(let applicationName, let message):
+            return L10n.format("Could not open the current path in %@: %@", applicationName, message)
         }
     }
 }
 
 @MainActor
-final class ITermService {
-    static let shared = ITermService()
+final class TerminalService {
+    static let shared = TerminalService()
+
+    // Retained for source compatibility while callers migrate from ITermService.
     nonisolated static let bundleIdentifier = "com.googlecode.iterm2"
 
+    private let settings: AppSettings
     private let workspace: NSWorkspace
+    private let fileManager: FileManager
+    private let processRunner: ([String]) throws -> Void
 
-    init(workspace: NSWorkspace = .shared) {
+    init(
+        settings: AppSettings? = nil,
+        workspace: NSWorkspace = .shared,
+        fileManager: FileManager = .default,
+        processRunner: @escaping ([String]) throws -> Void = TerminalService.runOpenProcess
+    ) {
+        self.settings = settings ?? .shared
         self.workspace = workspace
+        self.fileManager = fileManager
+        self.processRunner = processRunner
+    }
+
+    var selectedApplication: PreferredTerminalApplication {
+        settings.preferredTerminalApplication
+    }
+
+    var applicationName: String {
+        selectedApplication.displayName
     }
 
     var isAvailable: Bool {
-        workspace.urlForApplication(withBundleIdentifier: Self.bundleIdentifier) != nil
+        applicationURL(for: selectedApplication) != nil
     }
 
     func openDirectory(_ url: URL) throws {
-        guard isAvailable else { throw ITermServiceError.notInstalled }
+        let application = selectedApplication
+        guard let applicationURL = applicationURL(for: application) else {
+            throw TerminalServiceError.notInstalled(application.displayName)
+        }
 
         let directoryURL = url.standardizedFileURL
         var isDirectory: ObjCBool = false
         guard directoryURL.isFileURL,
-              FileManager.default.fileExists(atPath: directoryURL.path, isDirectory: &isDirectory),
-              isDirectory.boolValue else { throw ITermServiceError.invalidDirectory }
+              fileManager.fileExists(atPath: directoryURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else { throw TerminalServiceError.invalidDirectory }
 
-        guard let script = NSAppleScript(source: Self.script(forPath: directoryURL.path)) else {
-            throw ITermServiceError.scriptFailed("The automation script could not be created.")
-        }
-
-        var errorInfo: NSDictionary?
-        script.executeAndReturnError(&errorInfo)
-        if let errorInfo {
-            let message = errorInfo[NSAppleScript.errorMessage] as? String ?? "Unknown automation error."
-            throw ITermServiceError.scriptFailed(message)
+        do {
+            try processRunner(Self.launchArguments(
+                applicationURL: applicationURL,
+                directoryURL: directoryURL
+            ))
+        } catch {
+            throw TerminalServiceError.launchFailed(application.displayName, error.localizedDescription)
         }
     }
 
-    nonisolated static func script(forPath path: String) -> String {
-        let escapedPath = appleScriptLiteral(path)
-        return """
-        set targetPath to \(escapedPath)
-        tell application id "\(bundleIdentifier)"
-            activate
-            if (count of windows) is 0 then
-                set targetWindow to (create window with default profile)
-                set targetSession to current session of targetWindow
-            else
-                tell current window
-                    set targetTab to (create tab with default profile)
-                end tell
-                set targetSession to current session of targetTab
-            end if
-            tell targetSession
-                write text "cd " & quoted form of targetPath
-            end tell
-        end tell
-        """
+    func applicationURL(for application: PreferredTerminalApplication) -> URL? {
+        if let url = workspace.urlForApplication(withBundleIdentifier: application.bundleIdentifier) {
+            return url.standardizedFileURL
+        }
+
+        return Self.knownApplicationURLs(for: application)
+            .first { fileManager.fileExists(atPath: $0.path) }?
+            .standardizedFileURL
     }
 
-    private nonisolated static func appleScriptLiteral(_ value: String) -> String {
-        let escaped = value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        return "\"\(escaped)\""
+    nonisolated static func launchArguments(
+        applicationURL: URL,
+        directoryURL: URL
+    ) -> [String] {
+        ["-a", applicationURL.standardizedFileURL.path, directoryURL.standardizedFileURL.path]
+    }
+
+    private nonisolated static func knownApplicationURLs(
+        for application: PreferredTerminalApplication
+    ) -> [URL] {
+        switch application {
+        case .terminal:
+            return [URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")]
+        case .iTerm2:
+            return [
+                URL(fileURLWithPath: "/Applications/iTerm.app"),
+                URL(fileURLWithPath: "/Applications/iTerm2.app"),
+                FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Applications/iTerm.app")
+            ]
+        case .warp:
+            return [
+                URL(fileURLWithPath: "/Applications/Warp.app"),
+                FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Applications/Warp.app")
+            ]
+        }
+    }
+
+    private nonisolated static func runOpenProcess(arguments: [String]) throws {
+        let process = Process()
+        let errorPipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = arguments
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = errorPipe
+
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let data = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let message = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let description = message.flatMap { $0.isEmpty ? nil : $0 }
+                ?? L10n.string("The open command failed.")
+            throw NSError(
+                domain: "MultiFinder.TerminalService",
+                code: Int(process.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: description]
+            )
+        }
     }
 }
+
+typealias ITermService = TerminalService
+typealias ITermServiceError = TerminalServiceError

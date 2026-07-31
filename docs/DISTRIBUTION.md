@@ -1,7 +1,13 @@
 # Distribution
 
-MultiFinder ships via **Developer ID independent distribution** with Hardened
-Runtime and notarization. It is **not** an App Store app.
+MultiFinder supports two distribution paths:
+
+- **Automated GitHub Release**: requires no Apple credentials. It produces an
+  ad-hoc-signed, unnotarized Universal app for `arm64` and `x86_64`.
+- **Developer ID release**: requires an Apple Developer membership. It uses
+  Hardened Runtime, Developer ID signing, notarization, and ticket stapling.
+
+MultiFinder is **not** an App Store app.
 
 ## Why not the App Store?
 
@@ -31,13 +37,52 @@ If that decision ever changed, an App Store build would need:
   `Developer ID Application` identity, for both the app and the embedded
   `mfd` helper CLI. App Sandbox stays off in both configurations.
 
-The only Hardened Runtime exception is
-`com.apple.security.automation.apple-events` in
-`MultiFinder/MultiFinder.entitlements`: the app sends Apple Events via
-`NSAppleScript` to open folders in iTerm2 (declared to the user through
-`NSAppleEventsUsageDescription` in `MultiFinder/Info.plist`).
+The ad-hoc release script overrides the Release signing identity while
+building, then explicitly signs `Contents/Helpers/mfd` followed by the app.
+It does not change the checked-in Xcode project or the Developer ID path.
 
-## One-time setup
+Opening Terminal, iTerm2, or Warp uses the system `open` command. The app does
+not request Apple Events automation access or control those applications with
+AppleScript.
+
+## Automated release without a certificate
+
+To build the same package locally, run:
+
+```sh
+scripts/build-adhoc-release.sh
+```
+
+The script uses the checked-in `MultiFinder.xcodeproj` and:
+
+1. builds Release with `ARCHS="arm64 x86_64"` and `ONLY_ACTIVE_ARCH=NO`,
+2. verifies both slices in the app executable and embedded `mfd`,
+3. applies ad-hoc signatures to `mfd` and then `MultiFinder.app`,
+4. verifies the signatures and repeats all checks after a ZIP round trip, and
+5. writes `build/release/MultiFinder.zip` and
+   `build/release/MultiFinder.zip.sha256`.
+
+To publish, create and push a tag whose name starts with `v`:
+
+```sh
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+`.github/workflows/release.yml` builds on GitHub's macOS runner, creates or
+updates the Release for that tag, and uploads both files. It needs only the
+workflow's built-in `contents: write` permission; no signing secrets are used.
+
+The generated `MultiFinder.zip` is the installable binary. GitHub also adds
+`Source code (zip)` and `Source code (tar.gz)` automatically, but those contain
+source code and are not application installers.
+
+Because the automated build is not Apple-notarized, users must explicitly
+allow its first launch. See the [Chinese installation and verification
+instructions](UNNOTARIZED_RELEASE.md), which are also used as the GitHub
+Release notes.
+
+## Developer ID one-time setup
 
 1. **Developer ID certificate** — in your Apple Developer account (or via
    Xcode's Settings > Accounts > Manage Certificates), create a
@@ -65,7 +110,7 @@ The only Hardened Runtime exception is
        --apple-id you@example.com --team-id ABCDE12345
    ```
 
-## Cutting a release
+## Cutting a Developer ID release
 
 ```sh
 NOTARY_PROFILE=multifinder-notary scripts/release.sh

@@ -9,46 +9,59 @@ enum CursorCLIPlannerError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .notInstalled:
-            return "未安装 Cursor CLI（agent）。请先安装，或在设置中指定它的路径。"
+            return L10n.string(
+                "Cursor CLI (agent) is not installed. Install it or set its path in Settings."
+            )
         case .timedOut:
-            return "AI 响应超时，已停止本次任务。"
+            return L10n.string("The AI response timed out, so this task was stopped.")
         case .processFailed(let message):
             return message.isEmpty
-                ? "AI 运行出错。"
-                : "AI 运行失败：\(message)"
+                ? L10n.string("AI encountered an error.")
+                : L10n.format("AI failed: %@", message)
         case .unparseableOutput(let message):
             return message.isEmpty
-                ? "无法理解 AI 返回的内容。"
-                : "无法理解 AI 返回的内容：\(message)"
+                ? L10n.string("The AI response could not be understood.")
+                : L10n.format("The AI response could not be understood: %@", message)
         }
     }
 }
 
-final class CursorCLIPlanner: AIPlanner, AIQuestionAnswering {
+// UserDefaults supports concurrent reads; its SDK declaration does not yet conform to Sendable.
+final class CursorCLIPlanner: @unchecked Sendable, AIPlanner, AIQuestionAnswering {
     static let shared = CursorCLIPlanner()
-    static let executablePathDefaultsKey = "AIPlannerExecutablePath"
+    static let executablePathDefaultsKey = AppSettings.cursorCLIExecutablePathDefaultsKey
 
-    private let executableURL: URL
+    private let executableURLOverride: URL?
+    private let userDefaults: UserDefaults
     private let timeout: TimeInterval
 
-    init(executableURL: URL? = nil, timeout: TimeInterval = 120) {
-        self.executableURL = executableURL ?? Self.resolveExecutableURL()
+    init(
+        executableURL: URL? = nil,
+        timeout: TimeInterval = 120,
+        userDefaults: UserDefaults = .standard
+    ) {
+        executableURLOverride = executableURL
+        self.userDefaults = userDefaults
         self.timeout = timeout
     }
 
     var isAvailable: Bool {
-        FileManager.default.isExecutableFile(atPath: executableURL.path)
+        FileManager.default.isExecutableFile(atPath: currentExecutableURL.path)
     }
 
     func plan(_ request: AIPlanRequest) async throws -> AIPlan {
-        guard isAvailable else { throw CursorCLIPlannerError.notInstalled }
+        let executableURL = currentExecutableURL
+        guard FileManager.default.isExecutableFile(atPath: executableURL.path) else {
+            throw CursorCLIPlannerError.notInstalled
+        }
 
         let today = Date.now
         let firstOutput = try await run(
             prompt: Self.prompt(for: request, today: today),
             in: request.scopeRoot,
             mode: "plan",
-            outputFormat: "json"
+            outputFormat: "json",
+            executableURL: executableURL
         )
         let firstError: AIPlanParseError
         do {
@@ -67,7 +80,8 @@ final class CursorCLIPlanner: AIPlanner, AIQuestionAnswering {
             prompt: retryPrompt,
             in: request.scopeRoot,
             mode: "plan",
-            outputFormat: "json"
+            outputFormat: "json",
+            executableURL: executableURL
         )
         do {
             return try Self.parsePlan(fromCLIOutput: secondOutput)
@@ -77,27 +91,34 @@ final class CursorCLIPlanner: AIPlanner, AIQuestionAnswering {
     }
 
     func answer(_ request: AIAssistantRequest) async throws -> String {
-        guard isAvailable else { throw CursorCLIPlannerError.notInstalled }
+        let executableURL = currentExecutableURL
+        guard FileManager.default.isExecutableFile(atPath: executableURL.path) else {
+            throw CursorCLIPlannerError.notInstalled
+        }
         let output = try await run(
             prompt: Self.answerPrompt(for: request),
             in: request.scopeRoot,
             mode: "ask",
-            outputFormat: "text"
+            outputFormat: "text",
+            executableURL: executableURL
         )
         let answer = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !answer.isEmpty else {
-            throw CursorCLIPlannerError.unparseableOutput("AI 返回了空内容。")
+            throw CursorCLIPlannerError.unparseableOutput(
+                L10n.string("AI returned an empty response.")
+            )
         }
         return answer
     }
 
-    private static func resolveExecutableURL() -> URL {
-        if let path = UserDefaults.standard.string(forKey: executablePathDefaultsKey),
-           !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-        }
-        return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".local/bin/agent")
+    private var currentExecutableURL: URL {
+        executableURLOverride ?? Self.resolveExecutableURL(userDefaults: userDefaults)
+    }
+
+    static func resolveExecutableURL(userDefaults: UserDefaults = .standard) -> URL {
+        AppSettings.resolvedCursorCLIExecutableURL(
+            from: userDefaults.string(forKey: executablePathDefaultsKey)
+        )
     }
 
     // MARK: - Prompt
@@ -258,9 +279,9 @@ final class CursorCLIPlanner: AIPlanner, AIQuestionAnswering {
         prompt: String,
         in scopeRoot: URL,
         mode: String,
-        outputFormat: String
+        outputFormat: String,
+        executableURL: URL
     ) async throws -> String {
-        let executableURL = executableURL
         let timeout = timeout
         let worker = Task.detached(priority: .userInitiated) {
             try Self.runProcess(

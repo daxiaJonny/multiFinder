@@ -50,7 +50,7 @@ struct AIInputBar: View {
         HStack(spacing: 6) {
             Image(systemName: "sparkles")
                 .foregroundStyle(.secondary)
-            Text(viewModel.currentURL?.lastPathComponent ?? "当前文件夹")
+            Text(viewModel.currentURL?.lastPathComponent ?? L10n.string("Current Folder"))
                 .font(.system(size: 11, weight: .medium))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -61,14 +61,14 @@ struct AIInputBar: View {
                     Image(systemName: "trash")
                 }
                 .buttonStyle(.plain)
-                .help("清空对话")
+                .help("Clear Conversation")
             }
 
             Button(action: viewModel.toggleAIAssistant) {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.plain)
-            .help("关闭")
+            .help("Close")
         }
         .font(.system(size: 10))
         .foregroundStyle(.secondary)
@@ -82,7 +82,7 @@ struct AIInputBar: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
 
-            TextField("询问当前文件夹中的内容…", text: $question)
+            TextField("Ask about the current folder…", text: $question)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .focused($isFieldFocused)
@@ -97,7 +97,7 @@ struct AIInputBar: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("取消")
+                .help("Cancel")
             } else {
                 Button(action: submit) {
                     Image(systemName: "arrow.up.circle.fill")
@@ -105,7 +105,7 @@ struct AIInputBar: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(questionIsEmpty)
-                .help("提问")
+                .help("Ask")
             }
         }
         .padding(.horizontal, 10)
@@ -184,17 +184,17 @@ struct FileSearchSheet: View {
                 Image(systemName: "magnifyingglass")
                     .font(.title2)
                     .foregroundStyle(.secondary)
-                Text("搜索")
+                Text("Search")
                     .font(.headline)
             }
 
-            TextField("输入文件名或文件内容", text: $query)
+            TextField("Enter a file name or file contents", text: $query)
                 .textFieldStyle(.roundedBorder)
                 .focused($isFieldFocused)
                 .onSubmit(runSearch)
 
             if let currentURL = viewModel.currentURL {
-                Toggle("仅搜索当前文件夹", isOn: $searchCurrentFolder)
+                Toggle("Search Current Folder Only", isOn: $searchCurrentFolder)
                     .toggleStyle(.checkbox)
                 Text(currentURL.path)
                     .font(.caption)
@@ -204,10 +204,10 @@ struct FileSearchSheet: View {
             }
 
             HStack {
-                Button("取消") { dismiss() }
+                Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("搜索", action: runSearch)
+                Button("Search", action: runSearch)
                     .keyboardShortcut(.defaultAction)
                     .disabled(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
@@ -251,7 +251,7 @@ private struct AIOrganizePromptView: View {
                 Image(systemName: "wand.and.stars")
                     .font(.title2)
                     .foregroundStyle(.secondary)
-                Text("整理当前文件夹")
+                Text("Organize Current Folder")
                     .font(.headline)
             }
 
@@ -263,7 +263,7 @@ private struct AIOrganizePromptView: View {
                     .truncationMode(.middle)
             }
 
-            TextField("描述你希望如何整理这些文件", text: $instruction, axis: .vertical)
+            TextField("Describe how you want to organize these files", text: $instruction, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(3...6)
                 .focused($isFieldFocused)
@@ -277,7 +277,7 @@ private struct AIOrganizePromptView: View {
             }
 
             HStack {
-                Button("取消") {
+                Button("Cancel") {
                     viewModel.cancelAIPlanning()
                     dismiss()
                 }
@@ -288,10 +288,10 @@ private struct AIOrganizePromptView: View {
                 if viewModel.isAIPlanning {
                     ProgressView()
                         .controlSize(.small)
-                    Button("停止", action: viewModel.cancelAIPlanning)
+                    Button("Stop", action: viewModel.cancelAIPlanning)
                 } else {
                     Button(action: submit) {
-                        Label("查看整理方案", systemImage: "sparkles")
+                        Label("Review Organize Plan", systemImage: "sparkles")
                     }
                     .keyboardShortcut(.defaultAction)
                     .disabled(instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

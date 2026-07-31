@@ -6,9 +6,13 @@ import UniformTypeIdentifiers
 struct FileListView: View {
     @ObservedObject var viewModel: FileBrowserViewModel
     @ObservedObject private var clipboard = FileClipboard.shared
+    let canTransferToAdjacentPane: ([URL], FileDropOperation) -> Bool
     let onFocus: () -> Void
+    let onBeginFiltering: () -> Void
     let onQuickLook: () -> Void
     let onRename: (FileItem) -> Void
+    let onCopyToAdjacentPane: ([URL]) -> Void
+    let onMoveToAdjacentPane: ([URL]) -> Void
 
     var body: some View {
         Table(
@@ -52,7 +56,7 @@ struct FileListView: View {
             }
             .width(min: 90, ideal: 130, max: 220)
         } rows: {
-            ForEach(viewModel.items) { item in
+            ForEach(viewModel.visibleItems) { item in
                 // Table drop targets must be attached to TableRowContent, not hosted cell views.
                 if item.isDirectory && !item.isPackage {
                     if FileDropSafety.canStartDragging(item) {
@@ -78,6 +82,10 @@ struct FileListView: View {
         } primaryAction: { selection in
             open(selection: selection)
         }
+        .onKeyPress(KeyEquivalent("/")) {
+            onBeginFiltering()
+            return .handled
+        }
         .onKeyPress(.space) {
             onFocus()
             onQuickLook()
@@ -98,7 +106,7 @@ struct FileListView: View {
     private func fileContextMenu(selection: Set<FileItem.ID>) -> some View {
         let selectedItems = items(for: selection)
 
-        Button("打开") {
+        Button("Open") {
             viewModel.selectForContextMenu(selection)
             open(selection: selection)
         }
@@ -106,9 +114,9 @@ struct FileListView: View {
 
         if canChooseApplication(for: selectedItems) {
             let applications = FileOpeningService.shared.applications(for: selectedItems.map(\.url))
-            Menu("打开方式") {
+            Menu("Open With") {
                 if applications.isEmpty {
-                    Button("没有可用的应用程序") {}
+                    Button("No Applications Available") {}
                         .disabled(true)
                 } else {
                     ForEach(applications) { application in
@@ -121,7 +129,11 @@ struct FileListView: View {
                             )
                         } label: {
                             Label {
-                                Text(application.isDefault ? "\(application.name)（默认）" : application.name)
+                                Text(
+                                    application.isDefault
+                                        ? L10n.format("%@ (default)", application.name)
+                                        : application.name
+                                )
                             } icon: {
                                 Image(nsImage: NSWorkspace.shared.icon(forFile: application.url.path))
                             }
@@ -131,13 +143,13 @@ struct FileListView: View {
 
                 Divider()
 
-                Button("其他…") {
+                Button("Other…") {
                     chooseApplication(for: selectedItems, selection: selection)
                 }
             }
         }
 
-        Button("在“访达”中显示") {
+        Button("Show in Finder") {
             onFocus()
             viewModel.selectForContextMenu(selection)
             NSWorkspace.shared.activateFileViewerSelecting(selectedItems.map(\.url))
@@ -146,28 +158,44 @@ struct FileListView: View {
 
         Divider()
 
-        Button("拷贝") {
+        Button("Copy") {
             onFocus()
             viewModel.selectForContextMenu(selection)
             clipboard.copy(urls: selectedItems.map(\.url))
         }
         .disabled(selectedItems.isEmpty)
 
-        Button("剪切") {
+        Button("Cut") {
             onFocus()
             viewModel.selectForContextMenu(selection)
             clipboard.cut(urls: selectedItems.map(\.url))
         }
         .disabled(selectedItems.isEmpty)
 
-        Button("粘贴") {
+        Button("Paste") {
             pasteFromClipboard()
         }
         .disabled(!clipboard.hasContent || !viewModel.canCreateItems)
 
         Divider()
 
-        Button("重新命名…") {
+        Button("Copy to Adjacent Pane") {
+            onFocus()
+            viewModel.selectForContextMenu(selection)
+            onCopyToAdjacentPane(selectedItems.map(\.url))
+        }
+        .disabled(!canTransferToAdjacentPane(selectedItems.map(\.url), .copy))
+
+        Button("Move to Adjacent Pane") {
+            onFocus()
+            viewModel.selectForContextMenu(selection)
+            onMoveToAdjacentPane(selectedItems.map(\.url))
+        }
+        .disabled(!canTransferToAdjacentPane(selectedItems.map(\.url), .move))
+
+        Divider()
+
+        Button("Rename…") {
             guard let item = selectedItems.first else { return }
             onFocus()
             viewModel.selectForContextMenu(selection)
@@ -176,7 +204,7 @@ struct FileListView: View {
         .disabled(selectedItems.count != 1)
 
         if selectedItems.count >= 2 {
-            Button("重新命名 \(selectedItems.count) 个项目…") {
+            Button(L10n.format("Rename %lld Items…", Int64(selectedItems.count))) {
                 onFocus()
                 viewModel.selectForContextMenu(selection)
                 viewModel.requestBatchRename()
@@ -201,7 +229,7 @@ struct FileListView: View {
             }
         }
 
-        Button("移到废纸篓", role: .destructive) {
+        Button("Move to Trash", role: .destructive) {
             onFocus()
             viewModel.selectForContextMenu(selection)
             viewModel.deleteSelected()
@@ -214,11 +242,15 @@ struct FileListView: View {
     }
 
     private func compressTitle(for items: [FileItem]) -> String {
-        items.count == 1 ? "压缩“\(items[0].name)”" : "压缩 \(items.count) 个项目"
+        items.count == 1
+            ? L10n.format("Compress “%@”", items[0].name)
+            : L10n.format("Compress %lld Items", Int64(items.count))
     }
 
     private func extractTitle(for items: [FileItem]) -> String {
-        items.count == 1 ? "解压“\(items[0].name)”" : "解压 \(items.count) 个归档文件"
+        items.count == 1
+            ? L10n.format("Extract “%@”", items[0].name)
+            : L10n.format("Extract %lld Archives", Int64(items.count))
     }
 
     private func canChooseApplication(for items: [FileItem]) -> Bool {
@@ -227,11 +259,11 @@ struct FileListView: View {
 
     private func chooseApplication(for items: [FileItem], selection: Set<FileItem.ID>) {
         let panel = NSOpenPanel()
-        panel.title = "选择应用程序"
+        panel.title = L10n.string("Choose Application")
         panel.message = items.count == 1
-            ? "选择用于打开“\(items[0].name)”的应用程序。"
-            : "选择用于打开这 \(items.count) 个文件的应用程序。"
-        panel.prompt = "打开"
+            ? L10n.format("Choose an application to open “%@”.", items[0].name)
+            : L10n.format("Choose an application to open these %lld files.", Int64(items.count))
+        panel.prompt = L10n.string("Open")
         panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
         panel.allowedContentTypes = [.applicationBundle]
         panel.allowsMultipleSelection = false

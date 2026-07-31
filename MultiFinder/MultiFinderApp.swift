@@ -39,13 +39,13 @@ struct MultiFinderApp: App {
             }
 
             CommandGroup(replacing: .saveItem) {
-                Button("保存工作区模板") {
+                Button("Save Workspace Template") {
                     workspaceTemplateActions?.save()
                 }
                 .keyboardShortcut("s", modifiers: .command)
                 .disabled(workspaceTemplateActions == nil)
 
-                Button("另存工作区模板为…") {
+                Button("Save Workspace Template As…") {
                     workspaceTemplateActions?.saveAs()
                 }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
@@ -67,12 +67,12 @@ struct MultiFinderApp: App {
             }
 
             CommandGroup(replacing: .undoRedo) {
-                Button("撤销文件操作") {
+                Button("Undo File Operation") {
                     undo()
                 }
                 .keyboardShortcut("z", modifiers: .command)
 
-                Button("重做文件操作") {
+                Button("Redo File Operation") {
                     redo()
                 }
                 .keyboardShortcut("y", modifiers: .command)
@@ -124,13 +124,13 @@ struct MultiFinderApp: App {
 
                 Divider()
 
-                Button("搜索…") {
+                Button("Search…") {
                     layoutManager?.focusedPane?.presentSearch()
                 }
                 .keyboardShortcut("f", modifiers: .command)
                 .disabled(layoutManager == nil)
 
-                Button("询问当前文件夹…") {
+                Button("Ask About Current Folder…") {
                     layoutManager?.focusedPane?.toggleAIAssistant()
                 }
                 .keyboardShortcut("a", modifiers: [.command, .option])
@@ -139,7 +139,7 @@ struct MultiFinderApp: App {
                     layoutManager?.focusedPane?.isAIAssistantAvailable != true
                 )
 
-                Button("使用 AI 整理当前文件夹…") {
+                Button("Organize Current Folder with AI…") {
                     layoutManager?.focusedPane?.presentAIOrganize()
                 }
                 .disabled(
@@ -148,12 +148,12 @@ struct MultiFinderApp: App {
                 )
             }
 
-            CommandMenu("前往") {
-                Button("后退", action: goBack)
+            CommandMenu("Go") {
+                Button("Back", action: goBack)
                     .keyboardShortcut(.leftArrow, modifiers: .command)
-                Button("前进", action: goForward)
+                Button("Forward", action: goForward)
                     .keyboardShortcut(.rightArrow, modifiers: .command)
-                Button("Enclosing Folder") { layoutManager?.focusedPane?.goUp() }
+                Button("Enclosing Folder", action: goUp)
                     .keyboardShortcut(.upArrow, modifiers: .command)
                 Divider()
                 Button("Home") {
@@ -166,6 +166,20 @@ struct MultiFinderApp: App {
             }
 
             CommandMenu("Panes") {
+                Button("Copy to Adjacent Pane") {
+                    layoutManager?.copySelectionToAdjacentPane()
+                }
+                .keyboardShortcut(KeyEquivalent("\u{F708}"), modifiers: [])
+                .disabled(!canTransferSelectionToAdjacentPane(.copy))
+
+                Button("Move to Adjacent Pane") {
+                    layoutManager?.moveSelectionToAdjacentPane()
+                }
+                .keyboardShortcut(KeyEquivalent("\u{F709}"), modifiers: [])
+                .disabled(!canTransferSelectionToAdjacentPane(.move))
+
+                Divider()
+
                 Button("Split Right") {
                     guard let id = layoutManager?.focusedPaneID else { return }
                     layoutManager?.addPaneRight(of: id)
@@ -205,6 +219,10 @@ struct MultiFinderApp: App {
                     .keyboardShortcut(.downArrow, modifiers: [.command, .option])
             }
         }
+
+        Settings {
+            SettingsView()
+        }
     }
 
     private func cut() {
@@ -235,6 +253,13 @@ struct MultiFinderApp: App {
             #selector(NSStandardKeyBindingResponding.moveToEndOfLine(_:))
         ) else { return }
         layoutManager?.focusedPane?.goForward()
+    }
+
+    private func goUp() {
+        guard !TextEditingCommandRouter.perform(
+            #selector(NSStandardKeyBindingResponding.moveToBeginningOfDocument(_:))
+        ) else { return }
+        layoutManager?.focusedPane?.goUp()
     }
 
     private func copy() {
@@ -269,8 +294,21 @@ struct MultiFinderApp: App {
     }
 
     private var toggleFavoriteTitle: String {
-        guard let url = layoutManager?.focusedPane?.currentURL else { return "Add to Favorites" }
-        return favoritesStore.contains(url) ? "Remove from Favorites" : "Add to Favorites"
+        guard let url = layoutManager?.focusedPane?.currentURL else {
+            return L10n.string("Add to Favorites")
+        }
+        return favoritesStore.contains(url)
+            ? L10n.string("Remove from Favorites")
+            : L10n.string("Add to Favorites")
+    }
+
+    private func canTransferSelectionToAdjacentPane(_ operation: FileDropOperation) -> Bool {
+        guard let layoutManager,
+              let focusedPaneID = layoutManager.focusedPaneID else { return false }
+        return layoutManager.canTransferSelectionToAdjacentPane(
+            from: focusedPaneID,
+            operation: operation
+        )
     }
 }
 
@@ -278,27 +316,35 @@ struct MultiFinderApp: App {
 enum TextEditingCommandRouter {
     @discardableResult
     static func perform(_ action: Selector) -> Bool {
-        guard let responder = NSApp.keyWindow?.firstResponder,
-              isTextEditingResponder(responder) else { return false }
-        NSApp.sendAction(action, to: responder, from: nil)
-        return true
+        guard let responder = NSApp.keyWindow?.firstResponder as? NSTextView else { return false }
+        return NSApp.sendAction(action, to: responder, from: nil)
     }
 
     static func isTextEditingResponder(_ responder: NSResponder?) -> Bool {
-        responder is NSTextView || responder is NSTextField
+        responder is NSTextView
     }
 
     static func performUndo() -> Bool {
-        guard let responder = NSApp.keyWindow?.firstResponder,
-              isTextEditingResponder(responder) else { return false }
-        responder.undoManager?.undo()
+        performUndo(on: NSApp.keyWindow?.firstResponder)
+    }
+
+    static func performUndo(on responder: NSResponder?) -> Bool {
+        guard let responder = responder as? NSTextView else { return false }
+        if let undoManager = responder.undoManager, undoManager.canUndo {
+            undoManager.undo()
+        }
         return true
     }
 
     static func performRedo() -> Bool {
-        guard let responder = NSApp.keyWindow?.firstResponder,
-              isTextEditingResponder(responder) else { return false }
-        responder.undoManager?.redo()
+        performRedo(on: NSApp.keyWindow?.firstResponder)
+    }
+
+    static func performRedo(on responder: NSResponder?) -> Bool {
+        guard let responder = responder as? NSTextView else { return false }
+        if let undoManager = responder.undoManager, undoManager.canRedo {
+            undoManager.redo()
+        }
         return true
     }
 }
