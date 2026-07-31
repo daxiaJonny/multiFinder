@@ -27,3 +27,10 @@ jobs:
           CODE_SIGNING_ALLOWED=NO
           CODE_SIGNING_REQUIRED=NO
           test
+
+      - name: Build and verify Universal release package
+        run: scripts/build-adhoc-release.sh
+
+      - name: Verify release checksum
+        working-directory: build/release
+        run: shasum -a 256 -c MultiFinder.zip.sha256
