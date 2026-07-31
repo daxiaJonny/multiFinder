@@ -9,11 +9,7 @@ final class LocalizationTests: XCTestCase {
 
     func testCatalogFormatsSimplifiedChineseArguments() {
         let locale = Locale(identifier: "zh-Hans")
-        let format = String(
-            localized: "Search: %@",
-            bundle: .main,
-            locale: locale
-        )
+        let format = localized("Search: %@", locale: "zh-Hans")
 
         XCTAssertEqual(
             String(format: format, locale: locale, arguments: ["报告"]),
@@ -27,11 +23,15 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(localized("Move to Adjacent Pane", locale: "zh-Hans"), "移动到相邻窗格")
     }
 
-    private func localized(_ key: String.LocalizationValue, locale identifier: String) -> String {
-        String(
-            localized: key,
-            bundle: .main,
-            locale: Locale(identifier: identifier)
-        )
+    private func localized(_ key: String, locale identifier: String) -> String {
+        guard let localizationURL = Bundle.main.url(
+            forResource: identifier,
+            withExtension: "lproj"
+        ), let localizationBundle = Bundle(url: localizationURL) else {
+            XCTFail("Missing bundled localization for \(identifier)")
+            return key
+        }
+
+        return localizationBundle.localizedString(forKey: key, value: nil, table: "Localizable")
     }
 }
