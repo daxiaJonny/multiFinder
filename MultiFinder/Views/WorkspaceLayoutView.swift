@@ -10,16 +10,19 @@ struct WorkspaceLayoutView: View {
     var body: some View {
         GeometryReader { geometry in
             HStack(spacing: 0) {
-                SidebarView(
-                    onNavigate: focusedPane.navigate,
-                    onRecents: focusedPane.loadRecents
-                )
-                .frame(width: layoutManager.sidebarWidth)
+                if layoutManager.isSidebarVisible {
+                    SidebarView(
+                        currentLocation: focusedPane.location,
+                        onNavigate: focusedPane.navigate,
+                        onRecents: focusedPane.loadRecents
+                    )
+                    .frame(width: layoutManager.sidebarWidth)
 
-                SplitResizeHandle(axis: .vertical) { delta in
-                    layoutManager.resizeSidebar(to: layoutManager.sidebarWidth + delta)
-                } onCommit: {
-                    layoutManager.save()
+                    SplitResizeHandle(axis: .vertical) { delta in
+                        layoutManager.resizeSidebar(to: layoutManager.sidebarWidth + delta)
+                    } onCommit: {
+                        layoutManager.save()
+                    }
                 }
 
                 rowLayout(size: geometry.size)
@@ -31,7 +34,10 @@ struct WorkspaceLayoutView: View {
         let dividerSpace = dividerThickness * Double(max(layoutManager.rows.count - 1, 0))
         let availableHeight = max(size.height - dividerSpace, 1)
         let totalWeight = max(layoutManager.rows.map(\.heightWeight).reduce(0, +), 0.01)
-        let contentWidth = max(size.width - layoutManager.sidebarWidth - dividerThickness, 1)
+        let sidebarSpace = layoutManager.isSidebarVisible
+            ? layoutManager.sidebarWidth + dividerThickness
+            : 0
+        let contentWidth = max(size.width - sidebarSpace, 1)
 
         return VStack(spacing: 0) {
             ForEach(Array(layoutManager.rows.enumerated()), id: \.element.id) { rowIndex, row in

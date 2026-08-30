@@ -134,6 +134,63 @@ final class FileOperationServiceTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: proposedDestination), "existing")
     }
 
+    func testCaseOnlyRenameSucceedsAndKeepsUndoRedoOnCaseInsensitiveVolume() async throws {
+        let supportsCaseSensitiveNames = try sourceDirectory.resourceValues(
+            forKeys: [.volumeSupportsCaseSensitiveNamesKey]
+        ).volumeSupportsCaseSensitiveNames
+        try XCTSkipUnless(
+            supportsCaseSensitiveNames == false,
+            "This regression requires a case-insensitive volume."
+        )
+
+        let source = sourceDirectory.appendingPathComponent("ReadMe.TXT")
+        let destination = sourceDirectory.appendingPathComponent("readme.txt")
+        try Data("case-only rename".utf8).write(to: source)
+        let originalIdentity = try fileInode(at: source)
+
+        let result = await performDetailed { completion in
+            service.renameDetailed(
+                source,
+                to: destination,
+                conflictPolicy: .ask,
+                completion: completion
+            )
+        }
+        try await waitUntil { self.service.activeOperation == nil }
+        let recordID = try XCTUnwrap(service.history.first?.id)
+
+        XCTAssertEqual(result.status, .completed)
+        XCTAssertEqual(result.outcomes.first?.destination, destination)
+        XCTAssertEqual(try String(contentsOf: destination), "case-only rename")
+        XCTAssertEqual(try fileInode(at: destination), originalIdentity)
+        let renamedNames = try FileManager.default.contentsOfDirectory(atPath: sourceDirectory.path)
+        XCTAssertTrue(renamedNames.contains(destination.lastPathComponent))
+        XCTAssertFalse(renamedNames.contains(source.lastPathComponent))
+        XCTAssertTrue(service.canUndo)
+
+        service.undo()
+        try await waitUntil {
+            self.service.activeOperation == nil &&
+                self.service.history.first(where: { $0.id == recordID })?.status == .undone
+        }
+        XCTAssertEqual(try String(contentsOf: source), "case-only rename")
+        let undoneNames = try FileManager.default.contentsOfDirectory(atPath: sourceDirectory.path)
+        XCTAssertTrue(undoneNames.contains(source.lastPathComponent))
+        XCTAssertFalse(undoneNames.contains(destination.lastPathComponent))
+        XCTAssertTrue(service.canRedo)
+
+        let historyCount = service.history.count
+        service.redo()
+        try await waitUntil {
+            self.service.activeOperation == nil && self.service.history.count == historyCount + 1
+        }
+        XCTAssertEqual(try String(contentsOf: destination), "case-only rename")
+        XCTAssertEqual(try fileInode(at: destination), originalIdentity)
+        let redoneNames = try FileManager.default.contentsOfDirectory(atPath: sourceDirectory.path)
+        XCTAssertTrue(redoneNames.contains(destination.lastPathComponent))
+        XCTAssertFalse(redoneNames.contains(source.lastPathComponent))
+    }
+
     func testUndoReplacementRestoresOriginalDestination() async throws {
         let source = sourceDirectory.appendingPathComponent("report.txt")
         let destination = destinationDirectory.appendingPathComponent("report.txt")
@@ -289,6 +346,151 @@ final class FileOperationServiceTests: XCTestCase {
         XCTAssertEqual(result.status, .completed)
         XCTAssertEqual(result.outcomes.first?.destination, expectedCopy)
         XCTAssertEqual(try String(contentsOf: expectedCopy), "notes")
+    }
+
+    func testCopyDirectoryToItselfFailsBeforeMutation() async throws {
+        let source = sourceDirectory.appendingPathComponent("folder", isDirectory: true)
+        let marker = source.appendingPathComponent("marker.txt")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: false)
+        try Data("original".utf8).write(to: marker)
+
+        let result = await performDetailed { completion in
+            service.copyDetailed(
+                [source],
+                to: source,
+                conflictPolicy: .keepBoth,
+                completion: completion
+            )
+        }
+
+        XCTAssertEqual(result.status, .failed)
+        XCTAssertEqual(result.outcomes.first?.status, .failed)
+        XCTAssertEqual(
+            result.errorMessage,
+            L10n.format(
+                "Cannot %@ “%@” into itself or one of its descendants.",
+                FileOperationKind.copy.localizedName,
+                source.lastPathComponent
+            )
+        )
+        XCTAssertEqual(try String(contentsOf: marker), "original")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: source.appendingPathComponent("folder").path
+        ))
+        XCTAssertTrue(try operationArtifacts(in: source).isEmpty)
+    }
+
+    func testCopyDirectoryToDescendantFailsBeforeMutation() async throws {
+        let source = sourceDirectory.appendingPathComponent("folder", isDirectory: true)
+        let descendant = source.appendingPathComponent("child", isDirectory: true)
+        let marker = source.appendingPathComponent("marker.txt")
+        try FileManager.default.createDirectory(at: descendant, withIntermediateDirectories: true)
+        try Data("original".utf8).write(to: marker)
+
+        let result = await performDetailed { completion in
+            service.copyDetailed(
+                [source],
+                to: descendant,
+                conflictPolicy: .keepBoth,
+                completion: completion
+            )
+        }
+
+        XCTAssertEqual(result.status, .failed)
+        XCTAssertEqual(result.outcomes.first?.status, .failed)
+        XCTAssertEqual(try String(contentsOf: marker), "original")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: descendant.appendingPathComponent("folder").path
+        ))
+        XCTAssertTrue(try operationArtifacts(in: descendant).isEmpty)
+    }
+
+    func testMoveDirectoryToDescendantFailsBeforeMutation() async throws {
+        let source = sourceDirectory.appendingPathComponent("folder", isDirectory: true)
+        let descendant = source.appendingPathComponent("child", isDirectory: true)
+        let marker = source.appendingPathComponent("marker.txt")
+        try FileManager.default.createDirectory(at: descendant, withIntermediateDirectories: true)
+        try Data("original".utf8).write(to: marker)
+
+        let result = await performDetailed { completion in
+            service.moveDetailed(
+                [source],
+                to: descendant,
+                conflictPolicy: .keepBoth,
+                completion: completion
+            )
+        }
+
+        XCTAssertEqual(result.status, .failed)
+        XCTAssertEqual(result.outcomes.first?.status, .failed)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertEqual(try String(contentsOf: marker), "original")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: descendant.appendingPathComponent("folder").path
+        ))
+        XCTAssertTrue(try operationArtifacts(in: descendant).isEmpty)
+    }
+
+    func testCopyDirectoryToSymlinkedDescendantFailsBeforeMutation() async throws {
+        let source = sourceDirectory.appendingPathComponent("folder", isDirectory: true)
+        let descendant = source.appendingPathComponent("child", isDirectory: true)
+        let symlink = temporaryDirectory.appendingPathComponent("descendant-link")
+        let marker = source.appendingPathComponent("marker.txt")
+        try FileManager.default.createDirectory(at: descendant, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: symlink,
+            withDestinationURL: descendant
+        )
+        try Data("original".utf8).write(to: marker)
+
+        let result = await performDetailed { completion in
+            service.copyDetailed(
+                [source],
+                to: symlink,
+                conflictPolicy: .keepBoth,
+                completion: completion
+            )
+        }
+
+        XCTAssertEqual(result.status, .failed)
+        XCTAssertEqual(result.outcomes.first?.status, .failed)
+        XCTAssertEqual(
+            result.errorMessage,
+            L10n.format(
+                "Cannot %@ “%@” into itself or one of its descendants.",
+                FileOperationKind.copy.localizedName,
+                source.lastPathComponent
+            )
+        )
+        XCTAssertEqual(try String(contentsOf: marker), "original")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: descendant.appendingPathComponent("folder").path
+        ))
+        XCTAssertTrue(try operationArtifacts(in: descendant).isEmpty)
+    }
+
+    func testCopyDirectoryToSiblingSucceedsWithoutLeavingStagingArtifacts() async throws {
+        let source = sourceDirectory.appendingPathComponent("folder", isDirectory: true)
+        let marker = source.appendingPathComponent("marker.txt")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: false)
+        try Data("original".utf8).write(to: marker)
+
+        let result = await performDetailed { completion in
+            service.copyDetailed(
+                [source],
+                to: destinationDirectory,
+                conflictPolicy: .keepBoth,
+                completion: completion
+            )
+        }
+
+        let copiedMarker = destinationDirectory
+            .appendingPathComponent("folder", isDirectory: true)
+            .appendingPathComponent("marker.txt")
+        XCTAssertEqual(result.status, .completed)
+        XCTAssertEqual(try String(contentsOf: copiedMarker), "original")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
+        XCTAssertTrue(try operationArtifacts(in: destinationDirectory).isEmpty)
     }
 
     func testCancelWhileWaitingForConflictProducesCancelledOutcome() async throws {
@@ -482,6 +684,11 @@ final class FileOperationServiceTests: XCTestCase {
             ? L10n.format("%@ copy", baseName)
             : L10n.format("%@ copy %lld", baseName, Int64(copyNumber))
         return "\(copiedBaseName).\(fileExtension)"
+    }
+
+    private func operationArtifacts(in directory: URL) throws -> [String] {
+        try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasPrefix(".multifinder-") }
     }
 
     private func fileInode(at url: URL) throws -> UInt64 {

@@ -51,10 +51,16 @@ struct FileBrowserPane: View {
             layoutManager.newTab(in: pane.id)
         }
 
-        Button("Close Tab") {
-            layoutManager.closeTab(in: pane.id)
+        if pane.tabs.count > 1 {
+            Button("Close Tab") {
+                layoutManager.closeTab(in: pane.id)
+            }
+        } else {
+            Button("Close Pane") {
+                layoutManager.removePane(pane.id)
+            }
+            .disabled(layoutManager.totalPaneCount <= 1)
         }
-        .disabled(pane.tabs.count <= 1 && layoutManager.totalPaneCount <= 1)
 
         Divider()
 
@@ -177,6 +183,11 @@ private struct PaneTabItem: View {
 }
 
 private struct PaneTabContent: View {
+    private struct PendingRename {
+        let item: FileItem
+        let newName: String
+    }
+
     @ObservedObject var viewModel: FileBrowserViewModel
     let paneID: UUID
     let layoutManager: LayoutManager
@@ -184,6 +195,7 @@ private struct PaneTabContent: View {
     let onFocus: () -> Void
 
     @State private var renameTarget: FileItem?
+    @State private var pendingRename: PendingRename?
     @State private var isCurrentDirectoryDropTargeted = false
     @FocusState private var isFilterFieldFocused: Bool
     @ObservedObject private var operationService = FileOperationService.shared
@@ -211,6 +223,11 @@ private struct PaneTabContent: View {
                     onFocus()
                     viewModel.refresh()
                 },
+                canRemovePane: layoutManager.totalPaneCount > 1,
+                onRemovePane: {
+                    onFocus()
+                    layoutManager.removePane(paneID)
+                },
                 onTransferDroppedItems: { urls, destination, operation in
                     onFocus()
                     viewModel.transferDroppedItems(urls, into: destination, operation: operation)
@@ -223,43 +240,17 @@ private struct PaneTabContent: View {
 
             Divider()
 
-            FileListView(
-                viewModel: viewModel,
-                canTransferToAdjacentPane: { urls, operation in
-                    layoutManager.canTransferItemsToAdjacentPane(
-                        urls,
-                        from: paneID,
-                        operation: operation
-                    )
-                },
-                onFocus: onFocus,
-                onBeginFiltering: {
-                    onFocus()
-                    isFilterFieldFocused = true
-                },
-                onQuickLook: {
-                    QuickLookManager.shared.preview(urls: viewModel.selectedItemURLs)
-                },
-                onRename: { item in
-                    renameTarget = item
-                },
-                onCopyToAdjacentPane: { urls in
-                    onFocus()
-                    layoutManager.transferItemsToAdjacentPane(urls, from: paneID, operation: .copy)
-                },
-                onMoveToAdjacentPane: { urls in
-                    onFocus()
-                    layoutManager.transferItemsToAdjacentPane(urls, from: paneID, operation: .move)
-                }
-            )
+            browserContent
             .simultaneousGesture(TapGesture().onEnded { _ in onFocus() })
 
             Divider()
 
             statusBar
         }
-        .sheet(item: $renameTarget) { item in
-            RenameSheet(item: item, viewModel: viewModel)
+        .sheet(item: $renameTarget, onDismiss: finishPendingRename) { item in
+            RenameSheet(item: item) { newName in
+                pendingRename = PendingRename(item: item, newName: newName)
+            }
         }
         .sheet(isPresented: batchRenamePresented) {
             if let batchItems = viewModel.batchRenameItems {
@@ -278,17 +269,89 @@ private struct PaneTabContent: View {
             Text(viewModel.errorMessage ?? "")
         }
         .onChange(of: viewModel.location) { _, _ in
+            QuickLookManager.shared.closePreview(ownerID: quickLookOwnerID)
             layoutManager.save()
         }
+        .onChange(of: viewModel.selectedItems) { _, _ in
+            syncQuickLookPreview()
+        }
+        .onChange(of: viewModel.items) { _, _ in
+            syncQuickLookPreview()
+        }
         .onChange(of: viewModel.sortOrder) { _, _ in
+            layoutManager.save()
+        }
+        .onChange(of: viewModel.viewMode) { _, _ in
             layoutManager.save()
         }
         .onChange(of: viewModel.showHiddenFiles) { _, _ in
             layoutManager.save()
         }
+        .onChange(of: viewModel.isInfoPresented) { _, isPresented in
+            guard isPresented else { return }
+            viewModel.isInfoPresented = false
+            presentInfoWindow()
+        }
+        .onDisappear {
+            QuickLookManager.shared.closePreview(ownerID: quickLookOwnerID)
+        }
     }
 
     // MARK: - Status Bar
+
+    @ViewBuilder
+    private var browserContent: some View {
+        switch viewModel.viewMode {
+        case .list:
+            FileListView(
+                viewModel: viewModel,
+                canTransferToAdjacentPane: canTransferToAdjacentPane,
+                onFocus: onFocus,
+                onBeginFiltering: beginFiltering,
+                onQuickLook: quickLook,
+                onRename: beginRenaming,
+                onGetInfo: viewModel.presentInfo,
+                onCopyToAdjacentPane: copyToAdjacentPane,
+                onMoveToAdjacentPane: moveToAdjacentPane
+            )
+        case .icon:
+            FileGridView(
+                viewModel: viewModel,
+                canTransferToAdjacentPane: canTransferToAdjacentPane,
+                onFocus: onFocus,
+                onBeginFiltering: beginFiltering,
+                onQuickLook: quickLook,
+                onRename: beginRenaming,
+                onGetInfo: viewModel.presentInfo,
+                onCopyToAdjacentPane: copyToAdjacentPane,
+                onMoveToAdjacentPane: moveToAdjacentPane
+            )
+        case .column:
+            FileColumnView(
+                viewModel: viewModel,
+                canTransferToAdjacentPane: canTransferToAdjacentPane,
+                onFocus: onFocus,
+                onBeginFiltering: beginFiltering,
+                onQuickLook: quickLook,
+                onRename: beginRenaming,
+                onGetInfo: viewModel.presentInfo,
+                onCopyToAdjacentPane: copyToAdjacentPane,
+                onMoveToAdjacentPane: moveToAdjacentPane
+            )
+        case .gallery:
+            FileGalleryView(
+                viewModel: viewModel,
+                canTransferToAdjacentPane: canTransferToAdjacentPane,
+                onFocus: onFocus,
+                onBeginFiltering: beginFiltering,
+                onQuickLook: quickLook,
+                onRename: beginRenaming,
+                onGetInfo: viewModel.presentInfo,
+                onCopyToAdjacentPane: copyToAdjacentPane,
+                onMoveToAdjacentPane: moveToAdjacentPane
+            )
+        }
+    }
 
     private var filterBar: some View {
         HStack(spacing: 7) {
@@ -318,6 +381,18 @@ private struct PaneTabContent: View {
                 .buttonStyle(.plain)
                 .help("Clear Filter")
             }
+
+            Picker("View", selection: $viewModel.viewMode) {
+                ForEach(BrowserViewMode.allCases, id: \.self) { mode in
+                    Image(systemName: mode.systemImage)
+                        .accessibilityLabel(mode.localizedName)
+                        .tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .help("View Mode")
         }
         .font(.system(size: 11))
         .padding(.horizontal, 9)
@@ -370,6 +445,69 @@ private struct PaneTabContent: View {
     }
 
     // MARK: - Helpers
+
+    private func canTransferToAdjacentPane(_ urls: [URL], operation: FileDropOperation) -> Bool {
+        layoutManager.canTransferItemsToAdjacentPane(
+            urls,
+            from: paneID,
+            operation: operation
+        )
+    }
+
+    private func beginFiltering() {
+        onFocus()
+        isFilterFieldFocused = true
+    }
+
+    private func quickLook() {
+        QuickLookManager.shared.togglePreview(
+            urls: viewModel.selectedItemURLs,
+            ownerID: quickLookOwnerID
+        )
+    }
+
+    private func syncQuickLookPreview() {
+        QuickLookManager.shared.updatePreview(
+            urls: viewModel.selectedItemURLs,
+            ownerID: quickLookOwnerID
+        )
+    }
+
+    private var quickLookOwnerID: UUID { viewModel.id }
+
+    private func beginRenaming(_ item: FileItem) {
+        renameTarget = item
+    }
+
+    private func copyToAdjacentPane(_ urls: [URL]) {
+        onFocus()
+        layoutManager.transferItemsToAdjacentPane(urls, from: paneID, operation: .copy)
+    }
+
+    private func moveToAdjacentPane(_ urls: [URL]) {
+        onFocus()
+        layoutManager.transferItemsToAdjacentPane(urls, from: paneID, operation: .move)
+    }
+
+    private func renameFromInfo(_ url: URL, _ newName: String) {
+        let item = viewModel.items.first(where: {
+            $0.url.standardizedFileURL == url.standardizedFileURL
+        }) ?? FileItem(url: url)
+        viewModel.rename(item: item, to: newName)
+    }
+
+    private func presentInfoWindow() {
+        InfoWindowCoordinator.shared.present(
+            urls: viewModel.selectedItemURLs,
+            onRename: renameFromInfo
+        )
+    }
+
+    private func finishPendingRename() {
+        guard let request = pendingRename else { return }
+        pendingRename = nil
+        viewModel.rename(item: request.item, to: request.newName)
+    }
 
     private var batchRenamePresented: Binding<Bool> {
         Binding(

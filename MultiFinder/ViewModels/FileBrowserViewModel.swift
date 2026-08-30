@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Darwin
 import Foundation
 import SwiftUI
 
@@ -8,6 +9,15 @@ enum SortField: String, CaseIterable, Codable, Sendable {
     case date = "Date Modified"
     case size = "Size"
     case kind = "Kind"
+
+    var localizedName: String {
+        switch self {
+        case .name: L10n.string("Name")
+        case .date: L10n.string("Date Modified")
+        case .size: L10n.string("Size")
+        case .kind: L10n.string("Kind")
+        }
+    }
 }
 
 enum FileDropOperation: Sendable, Equatable {
@@ -21,10 +31,16 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
 
     @Published private(set) var location: BrowserLocation
     @Published private(set) var items: [FileItem] = []
+    @Published private(set) var tableRevision: UInt64 = 0
     @Published var selectedItems: Set<FileItem.ID> = []
     @Published var filterText = "" {
         didSet {
-            selectedItems.formIntersection(Set(visibleItems.map(\.id)))
+            let previousVisibleIDs = visibleItemIDs(in: items, filterText: oldValue)
+            let currentVisibleIDs = visibleItemIDs(in: items, filterText: filterText)
+            selectedItems.formIntersection(currentVisibleIDs)
+            if previousVisibleIDs != currentVisibleIDs {
+                tableRevision &+= 1
+            }
         }
     }
     @Published var sortOrder: [FileItemComparator] {
@@ -33,6 +49,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
             items = Self.sort(items: items, using: comparator)
         }
     }
+    @Published var viewMode: BrowserViewMode
     @Published var showHiddenFiles: Bool {
         didSet {
             if oldValue != showHiddenFiles {
@@ -43,6 +60,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
     @Published var batchRenameItems: [FileItem]?
+    @Published var isInfoPresented = false
     @Published var isSearchPresented = false
     @Published var isAIAssistantVisible = false
     @Published private(set) var isAIAnswering = false
@@ -64,9 +82,12 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     var canGoForward: Bool { !forwardHistory.isEmpty }
     var canGoUp: Bool {
         guard let url = currentURL else { return false }
-        return url.deletingLastPathComponent() != url
+        return url.deletingLastPathComponent().standardizedFileURL != url.standardizedFileURL
     }
-    var canCreateItems: Bool { location.supportsCreatingItems }
+    var canCreateItems: Bool {
+        guard let currentURL else { return false }
+        return Self.isWritableOrdinaryDirectory(currentURL)
+    }
     var sortField: SortField { sortOrder.first?.field ?? .name }
     var sortAscending: Bool { sortOrder.first?.order != .reverse }
 
@@ -84,15 +105,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     }
 
     var visibleItems: [FileItem] {
-        let query = filterText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return items }
-        return items.filter { item in
-            item.name.range(
-                of: query,
-                options: [.caseInsensitive, .diacriticInsensitive],
-                locale: .current
-            ) != nil
-        }
+        Self.visibleItems(in: items, filterText: filterText)
     }
 
     var isFiltering: Bool {
@@ -120,6 +133,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         location: BrowserLocation = .directory(FileManager.default.homeDirectoryForCurrentUser),
         sortField: SortField = .name,
         sortAscending: Bool = true,
+        viewMode: BrowserViewMode = .list,
         showHiddenFiles: Bool? = nil,
         backHistory: [BrowserLocation] = [],
         forwardHistory: [BrowserLocation] = [],
@@ -134,6 +148,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         self.appSettings = appSettings
         self.location = Self.normalized(location)
         self.sortOrder = [FileItemComparator(field: sortField, order: sortAscending ? .forward : .reverse)]
+        self.viewMode = viewMode
         self.showHiddenFiles = showHiddenFiles ?? appSettings.showHiddenFilesByDefault
         self.backHistory = backHistory.map(Self.normalized)
         self.forwardHistory = forwardHistory.map(Self.normalized)
@@ -201,17 +216,8 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
 
                 let currentComparator = sortOrder.first ?? FileItemComparator(field: .name)
                 let sortedItems = Self.sort(items: loadedItems, using: currentComparator)
-                items = sortedItems
+                applyLoadedItems(sortedItems)
                 isLoading = false
-
-                if !pendingSelectionURLs.isEmpty {
-                    let pending = Set(pendingSelectionURLs.map(\.standardizedFileURL))
-                    pendingSelectionURLs.removeAll()
-                    selectedItems = Set(visibleItems.lazy.map(\.id).filter(pending.contains))
-                } else {
-                    let availableIDs = Set(visibleItems.map(\.id))
-                    selectedItems.formIntersection(availableIDs)
-                }
             } catch is CancellationError {
                 // A newer request owns the loading state.
             } catch {
@@ -221,8 +227,11 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
                     requestedLocation.title,
                     error.localizedDescription
                 )
-                items = []
                 selectedItems.removeAll()
+                if !items.isEmpty {
+                    tableRevision &+= 1
+                }
+                items = []
                 isLoading = false
             }
         }
@@ -287,6 +296,47 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
             try await worker.value
         } onCancel: {
             worker.cancel()
+        }
+    }
+
+    private func applyLoadedItems(_ loadedItems: [FileItem]) {
+        let itemsChanged = items != loadedItems
+        let visibleIDs = visibleItemIDs(in: loadedItems, filterText: filterText)
+        let nextSelection: Set<FileItem.ID>
+
+        if pendingSelectionURLs.isEmpty {
+            nextSelection = selectedItems.intersection(visibleIDs)
+        } else {
+            let pending = Set(pendingSelectionURLs.map(\.standardizedFileURL))
+            pendingSelectionURLs.removeAll()
+            nextSelection = visibleIDs.intersection(pending)
+        }
+
+        // Keep Table's selection valid at every publication boundary. A renamed URL is a new row ID.
+        selectedItems.formIntersection(visibleIDs)
+        if itemsChanged {
+            tableRevision &+= 1
+        }
+        items = loadedItems
+        selectedItems = nextSelection
+    }
+
+    private func visibleItemIDs(in items: [FileItem], filterText: String) -> Set<FileItem.ID> {
+        Set(Self.visibleItems(in: items, filterText: filterText).map(\.id))
+    }
+
+    private nonisolated static func visibleItems(
+        in items: [FileItem],
+        filterText: String
+    ) -> [FileItem] {
+        let query = filterText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return items }
+        return items.filter { item in
+            item.name.range(
+                of: query,
+                options: [.caseInsensitive, .diacriticInsensitive],
+                locale: .current
+            ) != nil
         }
     }
 
@@ -374,16 +424,17 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         }
         defer { query.stop() }
 
-        for _ in 0..<40 where query.isGathering {
+        while query.isGathering {
             try Task.checkCancellation()
             try await Task.sleep(for: .milliseconds(50))
         }
 
         query.disableUpdates()
         var urls: [URL] = []
-        urls.reserveCapacity(min(query.resultCount, 200))
+        urls.reserveCapacity(query.resultCount)
 
-        for index in 0..<min(query.resultCount, 200) {
+        for index in 0..<query.resultCount {
+            if index.isMultiple(of: 64) { try Task.checkCancellation() }
             guard let item = query.result(at: index) as? NSMetadataItem,
                   let path = item.value(forAttribute: "kMDItemPath") as? String else { continue }
             let url = URL(fileURLWithPath: path).standardizedFileURL
@@ -428,24 +479,71 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
 
     func navigateToFile(_ fileURL: URL) {
         let normalizedFileURL = fileURL.standardizedFileURL
-        let parentURL = normalizedFileURL.deletingLastPathComponent()
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: parentURL.path, isDirectory: &isDirectory),
-              isDirectory.boolValue else {
-            errorMessage = L10n.string("The enclosing folder does not exist.")
+        var targetIsDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(
+            atPath: normalizedFileURL.path,
+            isDirectory: &targetIsDirectory
+        ) else {
+            let name = normalizedFileURL.lastPathComponent.isEmpty
+                ? normalizedFileURL.path
+                : normalizedFileURL.lastPathComponent
+            errorMessage = L10n.format("“%@” does not exist.", name)
             return
         }
+
+        if targetIsDirectory.boolValue {
+            navigate(to: normalizedFileURL)
+            return
+        }
+
+        _ = revealFiles([normalizedFileURL])
+    }
+
+    @discardableResult
+    func revealFiles(_ fileURLs: [URL]) -> Bool {
+        let normalizedFileURLs = Self.uniqueStandardizedURLs(fileURLs)
+        guard !normalizedFileURLs.isEmpty else { return false }
+
+        var parentURL: URL?
+        for normalizedFileURL in normalizedFileURLs {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(
+                atPath: normalizedFileURL.path,
+                isDirectory: &isDirectory
+            ), !isDirectory.boolValue else {
+                return false
+            }
+
+            let candidateParentURL = normalizedFileURL.deletingLastPathComponent().standardizedFileURL
+            var parentIsDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(
+                atPath: candidateParentURL.path,
+                isDirectory: &parentIsDirectory
+            ), parentIsDirectory.boolValue else {
+                errorMessage = L10n.string("The enclosing folder does not exist.")
+                return false
+            }
+
+            if let parentURL {
+                guard parentURL == candidateParentURL else { return false }
+            } else {
+                parentURL = candidateParentURL
+            }
+        }
+
+        guard let parentURL else { return false }
 
         let target = BrowserLocation.directory(parentURL)
         if target != location {
             backHistory.append(location)
             forwardHistory.removeAll()
-            transition(to: target)
-            pendingSelectionURLs = [normalizedFileURL]
+            transition(to: target, pendingSelection: Set(normalizedFileURLs))
         } else {
-            pendingSelectionURLs = [normalizedFileURL]
+            clearFilter()
+            pendingSelectionURLs = Set(normalizedFileURLs)
             reload()
         }
+        return true
     }
 
     func goBack() {
@@ -462,8 +560,8 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
 
     func goUp() {
         guard let currentURL else { return }
-        let parent = currentURL.deletingLastPathComponent()
-        guard parent != currentURL else { return }
+        let parent = currentURL.deletingLastPathComponent().standardizedFileURL
+        guard parent != currentURL.standardizedFileURL else { return }
         navigate(to: .directory(parent))
     }
 
@@ -486,6 +584,10 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
                 return
             }
         }
+    }
+
+    func openSelectedItems() {
+        selectedFileItems.forEach(openItem)
     }
 
     func openItems(_ urls: [URL], withApplicationAt applicationURL: URL) {
@@ -512,7 +614,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         item.isDirectory && !item.isPackage
     }
 
-    private func transition(to newLocation: BrowserLocation) {
+    private func transition(to newLocation: BrowserLocation, pendingSelection: Set<URL> = []) {
         clearFilter()
         cancelAIAnswering()
         cancelAIPlanning()
@@ -521,15 +623,24 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         aiOrganizeErrorMessage = nil
         aiPlanPreview = nil
         isAIOrganizePresented = false
+        isInfoPresented = false
         if newLocation.directoryURL == nil {
             isAIAssistantVisible = false
         }
         location = Self.normalized(newLocation)
         selectedItems.removeAll()
+        if !items.isEmpty {
+            tableRevision &+= 1
+        }
         items.removeAll()
-        pendingSelectionURLs.removeAll()
+        pendingSelectionURLs = pendingSelection
         configureDirectoryMonitor()
         reload()
+    }
+
+    private nonisolated static func uniqueStandardizedURLs(_ urls: [URL]) -> [URL] {
+        var seen = Set<URL>()
+        return urls.map(\.standardizedFileURL).filter { seen.insert($0).inserted }
     }
 
     private static func normalized(_ location: BrowserLocation) -> BrowserLocation {
@@ -552,6 +663,10 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
 
     func toggleSort(by field: SortField) {
         let ascending = sortField == field ? !sortAscending : true
+        setSort(by: field, ascending: ascending)
+    }
+
+    func setSort(by field: SortField, ascending: Bool) {
         sortOrder = [FileItemComparator(field: field, order: ascending ? .forward : .reverse)]
     }
 
@@ -572,6 +687,34 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
 
     func selectAll() {
         selectedItems = Set(visibleItems.map(\.id))
+    }
+
+    func pasteDestination(for selection: Set<FileItem.ID>) -> URL? {
+        let contextItems = items.filter { selection.contains($0.id) }
+        if contextItems.count == 1, let contextItem = contextItems.first, contextItem.isDirectory {
+            guard Self.isWritableOrdinaryDirectory(contextItem.url) else { return nil }
+            return contextItem.url.standardizedFileURL
+        }
+
+        guard let currentURL, Self.isWritableOrdinaryDirectory(currentURL) else { return nil }
+        return currentURL.standardizedFileURL
+    }
+
+    nonisolated static func isWritableOrdinaryDirectory(_ url: URL) -> Bool {
+        let normalizedURL = url.standardizedFileURL
+        guard let values = try? normalizedURL.resourceValues(
+            forKeys: [.isDirectoryKey, .isPackageKey, .isSymbolicLinkKey]
+        ), values.isDirectory == true,
+        values.isPackage != true,
+        values.isSymbolicLink != true else {
+            return false
+        }
+        return FileManager.default.isWritableFile(atPath: normalizedURL.path)
+    }
+
+    func presentInfo() {
+        guard !selectedItems.isEmpty else { return }
+        isInfoPresented = true
     }
 
     // MARK: - File operations
@@ -641,12 +784,20 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         }
     }
 
+    func duplicateSelected() {
+        let urls = selectedItemURLs
+        guard !urls.isEmpty else { return }
+        copyItems(from: urls, conflictPolicy: .keepBoth)
+    }
+
     func copyItems(
         from urls: [URL],
+        to requestedDestination: URL? = nil,
         conflictPolicy: FileConflictPolicy = .ask,
         completion: ((FileOperationResult) -> Void)? = nil
     ) {
-        guard let destination = currentURL else {
+        guard let destination = requestedDestination ?? currentURL,
+              Self.isWritableOrdinaryDirectory(destination) else {
             let message = L10n.string("Items can only be pasted inside a folder.")
             errorMessage = message
             completion?(FileOperationResult(status: .failed, outcomes: [], errorMessage: message))
@@ -660,10 +811,12 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
 
     func moveItems(
         from urls: [URL],
+        to requestedDestination: URL? = nil,
         conflictPolicy: FileConflictPolicy = .ask,
         completion: ((FileOperationResult) -> Void)? = nil
     ) {
-        guard let destination = currentURL else {
+        guard let destination = requestedDestination ?? currentURL,
+              Self.isWritableOrdinaryDirectory(destination) else {
             let message = L10n.string("Items can only be moved inside a folder.")
             errorMessage = message
             completion?(FileOperationResult(
@@ -688,19 +841,47 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         let destination = destination.standardizedFileURL
         guard Self.isDirectory(destination) else { return false }
 
-        let sources = Self.validDropSources(urls, into: destination, operation: operation)
+        let effectiveOperation: FileDropOperation
+        switch operation {
+        case .copy:
+            effectiveOperation = .copy
+        case .move:
+            effectiveOperation = Self.dropOperation(
+                for: urls,
+                into: destination,
+                optionPressed: false
+            )
+        }
+
+        let sources = Self.validDropSources(urls, into: destination, operation: effectiveOperation)
         guard !sources.isEmpty else { return false }
 
         let completion: (FileOperationResult) -> Void = { [weak self] result in
             self?.finishOperation(result, selectingCompletedDestinations: true)
         }
-        switch operation {
+        switch effectiveOperation {
         case .move:
             operationService.moveDetailed(sources, to: destination, completion: completion)
         case .copy:
             operationService.copyDetailed(sources, to: destination, completion: completion)
         }
         return true
+    }
+
+    nonisolated static func dropOperation(
+        for sourceURLs: [URL],
+        into destination: URL,
+        optionPressed: Bool
+    ) -> FileDropOperation {
+        guard !optionPressed, !sourceURLs.isEmpty,
+              let destinationVolume = volumeIdentifier(for: destination) else {
+            return .copy
+        }
+
+        guard sourceURLs.allSatisfy({ volumeIdentifier(for: $0) == destinationVolume }) else {
+            return .copy
+        }
+        return .move
     }
 
     static func validDropSources(
@@ -750,6 +931,16 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         let candidateComponents = candidate.standardizedFileURL.pathComponents
         guard candidateComponents.count > ancestorComponents.count else { return false }
         return candidateComponents.prefix(ancestorComponents.count).elementsEqual(ancestorComponents)
+    }
+
+    private nonisolated static func volumeIdentifier(for url: URL) -> UInt64? {
+        var metadata = stat()
+        let result = url.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return Int32(-1) }
+            return lstat(path, &metadata)
+        }
+        guard result == 0 else { return nil }
+        return UInt64(metadata.st_dev)
     }
 
     func revealInFinder() {

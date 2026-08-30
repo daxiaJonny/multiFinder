@@ -1,33 +1,43 @@
+import AppKit
 import SwiftUI
 
 struct WorkspaceSceneRoot: View {
     @SceneStorage("MultiFinder.workspaceState") private var workspaceState = ""
     @SceneStorage("MultiFinder.activeWorkspaceTemplateID") private var activeTemplateID = ""
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         ContentView(
             serializedState: workspaceState,
-            activeTemplateID: $activeTemplateID
-        ) { newState in
-            workspaceState = newState
-        }
+            activeTemplateID: $activeTemplateID,
+            onPersist: { newState in
+                workspaceState = newState
+            },
+            onRequestWorkspace: {
+                openWindow(id: "workspace")
+            }
+        )
     }
 }
 
 struct ContentView: View {
     @StateObject private var layoutManager: LayoutManager
+    @ObservedObject private var operationService = FileOperationService.shared
     @Environment(\.scenePhase) private var scenePhase
     @Binding private var activeTemplateID: String
     private let onPersist: (String) -> Void
+    private let onRequestWorkspace: ExternalOpenRouter.WorkspaceOpenAction
 
     init(
         serializedState: String = "",
         activeTemplateID: Binding<String> = .constant(""),
-        onPersist: @escaping (String) -> Void = { _ in }
+        onPersist: @escaping (String) -> Void = { _ in },
+        onRequestWorkspace: @escaping ExternalOpenRouter.WorkspaceOpenAction = {}
     ) {
         _layoutManager = StateObject(wrappedValue: LayoutManager(serializedState: serializedState))
         _activeTemplateID = activeTemplateID
         self.onPersist = onPersist
+        self.onRequestWorkspace = onRequestWorkspace
     }
 
     var body: some View {
@@ -41,7 +51,20 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 600, idealWidth: 1100, minHeight: 400, idealHeight: 700)
-        .focusedValue(\.layoutManager, layoutManager)
+        .background {
+            WindowFrameRecovery { window in
+                guard let window else { return }
+                layoutManager.workspaceWindow = window
+                ExternalOpenRouter.shared.register(layoutManager: layoutManager, window: window)
+            }
+        }
+        .sheet(
+            isPresented: $layoutManager.isGoToFolderPresented,
+            onDismiss: layoutManager.dismissGoToFolder
+        ) {
+            GoToFolderSheet(layoutManager: layoutManager)
+        }
+        .focusedSceneValue(\.layoutManager, layoutManager)
         .onChange(of: layoutManager.serializedState) { _, newState in
             onPersist(newState)
         }
@@ -53,13 +76,181 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             layoutManager.save()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
+            guard let window = notification.object as? NSWindow else { return }
+            ExternalOpenRouter.shared.windowDidBecomeKey(window)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { notification in
+            guard let window = notification.object as? NSWindow else { return }
+            if window === layoutManager.workspaceWindow,
+               operationService.pendingConflict != nil {
+                operationService.cancelCurrent()
+            }
+            ExternalOpenRouter.shared.windowWillClose(window)
+        }
         .onAppear {
             onPersist(layoutManager.serializedState)
+            ExternalOpenRouter.shared.register(layoutManager: layoutManager)
+            ExternalOpenRouter.shared.setWorkspaceOpenAction(onRequestWorkspace)
+        }
+        .onDisappear {
+            if operationService.pendingConflict != nil {
+                operationService.cancelCurrent()
+            }
+            ExternalOpenRouter.shared.unregister(layoutManager: layoutManager)
         }
         .onOpenURL { url in
-            guard let request = ExternalOpenRequest(url: url) else { return }
-            layoutManager.openExternalPath(request.targetURL)
+            _ = ExternalOpenRouter.shared.receive(urls: [url], source: .swiftUI)
         }
+    }
+}
+
+private struct GoToFolderSheet: View {
+    @ObservedObject var layoutManager: LayoutManager
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var isPathFocused: Bool
+    @State private var path: String
+    @State private var errorMessage: String?
+
+    init(layoutManager: LayoutManager) {
+        self.layoutManager = layoutManager
+        _path = State(initialValue: layoutManager.focusedPane?.currentURL?.path ?? "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Go to Folder")
+                .font(.headline)
+
+            TextField("Path", text: $path)
+                .textFieldStyle(.roundedBorder)
+                .focused($isPathFocused)
+                .onSubmit(submit)
+
+            if let errorMessage {
+                Text(verbatim: errorMessage)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Spacer()
+
+                Button("Cancel", role: .cancel, action: cancel)
+                    .keyboardShortcut(.cancelAction)
+
+                Button("Go", action: submit)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 440)
+        .onAppear {
+            path = layoutManager.focusedPane?.currentURL?.path ?? ""
+            errorMessage = nil
+            isPathFocused = true
+        }
+    }
+
+    private func submit() {
+        guard layoutManager.goToFolder(path) else {
+            errorMessage = layoutManager.focusedPane?.errorMessage
+                ?? L10n.string("The requested path does not exist.")
+            return
+        }
+
+        errorMessage = nil
+        layoutManager.dismissGoToFolder()
+        dismiss()
+    }
+
+    private func cancel() {
+        layoutManager.dismissGoToFolder()
+        dismiss()
+    }
+}
+
+private struct WindowFrameRecovery: NSViewRepresentable {
+    let onWindowChange: @MainActor (NSWindow?) -> Void
+
+    init(onWindowChange: @escaping @MainActor (NSWindow?) -> Void = { _ in }) {
+        self.onWindowChange = onWindowChange
+    }
+
+    func makeNSView(context: Context) -> WindowFrameRecoveryView {
+        WindowFrameRecoveryView(onWindowChange: onWindowChange)
+    }
+
+    func updateNSView(_ nsView: WindowFrameRecoveryView, context: Context) {
+        nsView.onWindowChange = onWindowChange
+        if let window = nsView.window {
+            onWindowChange(window)
+        }
+    }
+}
+
+@MainActor
+private final class WindowFrameRecoveryView: NSView {
+    private static let recoveryVersionKey = "MultiFinder.windowFrameRecovery.v1"
+    var onWindowChange: @MainActor (NSWindow?) -> Void
+
+    init(onWindowChange: @escaping @MainActor (NSWindow?) -> Void) {
+        self.onWindowChange = onWindowChange
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) {
+        onWindowChange = { _ in }
+        super.init(coder: coder)
+    }
+
+    private static var primaryScreen: NSScreen? {
+        NSScreen.screens.first { $0.frame.origin == .zero } ?? NSScreen.screens.first
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        onWindowChange(window)
+        guard let window else { return }
+
+        // SwiftUI applies the restored frame after the view enters the window.
+        DispatchQueue.main.async {
+            Self.recoverIfNeeded(window)
+        }
+    }
+
+    private static func recoverIfNeeded(_ window: NSWindow) {
+        let shouldMigratePreviousFrame = !UserDefaults.standard.bool(forKey: recoveryVersionKey)
+        let frame = window.frame
+        let titleBarHeight: CGFloat = 44
+        let titleBar = NSRect(
+            x: frame.minX + min(200, frame.width / 2),
+            y: frame.maxY - titleBarHeight,
+            width: min(400, frame.width),
+            height: titleBarHeight
+        )
+        let hasVisibleTitleBar = NSScreen.screens.contains { screen in
+            screen.visibleFrame.intersects(titleBar)
+        }
+
+        guard shouldMigratePreviousFrame || !hasVisibleTitleBar else { return }
+        let targetScreen = shouldMigratePreviousFrame
+            ? Self.primaryScreen
+            : (window.screen ?? Self.primaryScreen)
+        guard let screen = targetScreen else { return }
+
+        UserDefaults.standard.set(true, forKey: recoveryVersionKey)
+
+        let visibleFrame = screen.visibleFrame
+        var recoveredFrame = frame
+        recoveredFrame.size.width = min(max(recoveredFrame.width, 600), visibleFrame.width)
+        recoveredFrame.size.height = min(max(recoveredFrame.height, 400), visibleFrame.height)
+        recoveredFrame.origin.x = visibleFrame.midX - recoveredFrame.width / 2
+        recoveredFrame.origin.y = visibleFrame.midY - recoveredFrame.height / 2
+
+        window.setFrame(recoveredFrame, display: true, animate: false)
+        window.makeKeyAndOrderFront(nil)
     }
 }
 
@@ -87,7 +278,7 @@ private struct WorkspaceSurface: View {
                 onDeleteTemplate: { templatePendingDeletion = $0 }
             )
         }
-        .focusedValue(
+        .focusedSceneValue(
             \.workspaceTemplateActions,
             WorkspaceTemplateActions(save: saveCurrentTemplate, saveAs: beginSavingTemplateAs)
         )
@@ -252,6 +443,12 @@ private struct BrowserToolbar: ToolbarContent {
 
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
+            Button(action: layoutManager.toggleSidebar) {
+                Image(systemName: "sidebar.left")
+                    .accessibilityLabel(sidebarToggleTitle)
+            }
+            .help(sidebarToggleTitle)
+
             Button(action: pane.goBack) {
                 Image(systemName: "chevron.left")
             }
@@ -485,6 +682,12 @@ private struct BrowserToolbar: ToolbarContent {
     private var isCurrentFolderFavorite: Bool {
         guard let url = pane.currentURL else { return false }
         return favoritesStore.contains(url)
+    }
+
+    private var sidebarToggleTitle: String {
+        layoutManager.isSidebarVisible
+            ? L10n.string("Hide Sidebar")
+            : L10n.string("Show Sidebar")
     }
 
     private func toggleFavorite() {

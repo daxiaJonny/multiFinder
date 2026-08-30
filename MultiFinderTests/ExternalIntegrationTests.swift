@@ -18,6 +18,177 @@ final class ExternalIntegrationTests: XCTestCase {
         XCTAssertNil(ExternalOpenRequest(url: URL(string: "multifinder://open")!))
     }
 
+    func testExternalOpenRequestNormalizesFileURLsAndMultifinderPaths() throws {
+        let fileURL = URL(fileURLWithPath: "/tmp/MultiFinder/../MultiFinder/report.txt")
+        let fileRequest = try XCTUnwrap(ExternalOpenRequest(url: fileURL))
+        XCTAssertEqual(fileRequest.targetURL.path, "/tmp/MultiFinder/report.txt")
+
+        let customURL = try XCTUnwrap(ExternalOpenRequest.url(for: fileURL))
+        let customRequest = try XCTUnwrap(ExternalOpenRequest(url: customURL))
+        XCTAssertEqual(customRequest.targetURL, fileRequest.targetURL)
+    }
+
+    func testExternalOpenRequestRejectsRelativePathsAndRemoteFileHosts() throws {
+        let relativePath = try XCTUnwrap(URL(string: "multifinder://open?path=relative/report.txt"))
+        XCTAssertNil(ExternalOpenRequest(url: relativePath))
+
+        let remoteFile = try XCTUnwrap(URL(string: "file://server/share/report.txt"))
+        XCTAssertNil(ExternalOpenRequest(url: remoteFile))
+        XCTAssertNil(ExternalOpenRequest.url(for: remoteFile))
+
+        let localHostFile = try XCTUnwrap(URL(string: "file://localhost/tmp/report.txt"))
+        XCTAssertEqual(
+            ExternalOpenRequest(url: localHostFile)?.targetURL,
+            URL(fileURLWithPath: "/tmp/report.txt")
+        )
+    }
+
+    func testExternalOpenRouterQueuesAndDrainsMultipleURLsInOrder() {
+        let router = ExternalOpenRouter()
+        let first = URL(fileURLWithPath: "/tmp/MultiFinder/first.txt")
+        let second = URL(fileURLWithPath: "/tmp/MultiFinder/second.txt")
+        var delivered: [URL] = []
+
+        XCTAssertEqual(router.receive(urls: [first, second]), 2)
+        XCTAssertEqual(router.pendingRequestCount, 2)
+
+        router.register(workspaceID: UUID()) { request in
+            delivered.append(request.targetURL)
+        }
+
+        XCTAssertEqual(delivered, [first.standardizedFileURL, second.standardizedFileURL])
+        XCTAssertEqual(router.pendingRequestCount, 0)
+        XCTAssertEqual(router.drainPendingRequests(), 0)
+        XCTAssertEqual(delivered.count, 2)
+    }
+
+    func testExternalOpenRouterPreservesBatchEventForBatchWorkspace() {
+        let router = ExternalOpenRouter()
+        let first = URL(fileURLWithPath: "/tmp/MultiFinder/first.txt")
+        let second = URL(fileURLWithPath: "/tmp/MultiFinder/second.txt")
+        var deliveredEvents: [[URL]] = []
+
+        router.registerBatch(workspaceID: UUID()) { requests in
+            deliveredEvents.append(requests.map(\.targetURL))
+        }
+
+        XCTAssertEqual(router.receive(urls: [first, second]), 2)
+        XCTAssertEqual(deliveredEvents, [[first.standardizedFileURL, second.standardizedFileURL]])
+        XCTAssertEqual(router.pendingRequestCount, 0)
+    }
+
+    func testExternalOpenRouterKeepsPendingEventBatchUntilWorkspaceRegisters() {
+        let router = ExternalOpenRouter()
+        let first = URL(fileURLWithPath: "/tmp/MultiFinder/first.txt")
+        let second = URL(fileURLWithPath: "/tmp/MultiFinder/second.txt")
+        var deliveredEvents: [[URL]] = []
+
+        XCTAssertEqual(router.receive(urls: [first, second]), 2)
+        XCTAssertEqual(router.pendingRequestCount, 2)
+
+        router.registerBatch(workspaceID: UUID()) { requests in
+            deliveredEvents.append(requests.map(\.targetURL))
+        }
+
+        XCTAssertEqual(deliveredEvents, [[first.standardizedFileURL, second.standardizedFileURL]])
+        XCTAssertEqual(router.pendingRequestCount, 0)
+    }
+
+    func testExternalOpenBatchSelectsAllFilesInOneParent() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MultiFinderExternalOpen-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let first = directory.appendingPathComponent("first.txt")
+        let second = directory.appendingPathComponent("second.txt")
+        try Data().write(to: first)
+        try Data().write(to: second)
+
+        let manager = LayoutManager()
+        let pane = manager.rows[0].panes[0]
+        pane.selectedTab.navigate(to: directory)
+        try await waitUntil { !pane.selectedTab.isLoading }
+        pane.selectedTab.filterText = "does-not-match"
+
+        XCTAssertTrue(manager.openExternalPaths([first, second]))
+        try await waitUntil {
+            !pane.selectedTab.isLoading
+                && pane.selectedTab.filterText.isEmpty
+                && pane.selectedTab.selectedItems == Set([first.standardizedFileURL, second.standardizedFileURL])
+        }
+    }
+
+    func testExternalOpenRouterSuppressesDuplicateDeliveryAcrossEventSources() {
+        var currentTime = Date(timeIntervalSince1970: 100)
+        let router = ExternalOpenRouter(
+            duplicateDeliveryWindow: 10,
+            now: { currentTime }
+        )
+        let first = URL(fileURLWithPath: "/tmp/MultiFinder/first.txt")
+        let second = URL(fileURLWithPath: "/tmp/MultiFinder/second.txt")
+        var delivered: [URL] = []
+        router.register(workspaceID: UUID()) { request in
+            delivered.append(request.targetURL)
+        }
+
+        XCTAssertEqual(router.receive(urls: [first, second], source: .appKit), 2)
+        XCTAssertEqual(router.receive(urls: [first, second], source: .swiftUI), 0)
+        XCTAssertEqual(delivered, [first.standardizedFileURL, second.standardizedFileURL])
+
+        currentTime = currentTime.addingTimeInterval(11)
+        XCTAssertEqual(router.receive(urls: [first], source: .swiftUI), 1)
+        XCTAssertEqual(delivered.count, 3)
+        XCTAssertEqual(delivered.last, first.standardizedFileURL)
+    }
+
+    func testExternalOpenRouterDeduplicatesWithinAndAcrossOverlappingEvents() {
+        var currentTime = Date(timeIntervalSince1970: 100)
+        let router = ExternalOpenRouter(
+            duplicateDeliveryWindow: 10,
+            now: { currentTime }
+        )
+        let first = URL(fileURLWithPath: "/tmp/MultiFinder/first.txt")
+        let second = URL(fileURLWithPath: "/tmp/MultiFinder/second.txt")
+        let third = URL(fileURLWithPath: "/tmp/MultiFinder/third.txt")
+        var delivered: [URL] = []
+        router.register(workspaceID: UUID()) { request in
+            delivered.append(request.targetURL)
+        }
+
+        XCTAssertEqual(router.receive(urls: [first, first, second], source: .appKit), 2)
+        XCTAssertEqual(router.receive(urls: [second, third], source: .swiftUI), 1)
+        XCTAssertEqual(delivered, [first.standardizedFileURL, second.standardizedFileURL, third.standardizedFileURL])
+
+        currentTime = currentTime.addingTimeInterval(11)
+        XCTAssertEqual(router.receive(urls: [first], source: .appKit), 1)
+        XCTAssertEqual(delivered.last, first.standardizedFileURL)
+    }
+
+    func testExternalOpenRouterRequestsOneWorkspaceWhenAllWindowsAreClosed() {
+        let router = ExternalOpenRouter()
+        let first = URL(fileURLWithPath: "/tmp/MultiFinder/first.txt")
+        let second = URL(fileURLWithPath: "/tmp/MultiFinder/second.txt")
+        var workspaceOpenRequests = 0
+        var delivered: [URL] = []
+
+        router.setWorkspaceOpenAction {
+            workspaceOpenRequests += 1
+        }
+
+        XCTAssertEqual(router.receive(urls: [first]), 1)
+        XCTAssertEqual(router.receive(urls: [second], source: .swiftUI), 1)
+        XCTAssertEqual(workspaceOpenRequests, 1)
+        XCTAssertEqual(router.pendingRequestCount, 2)
+
+        router.register(workspaceID: UUID()) { request in
+            delivered.append(request.targetURL)
+        }
+
+        XCTAssertEqual(delivered, [first.standardizedFileURL, second.standardizedFileURL])
+        XCTAssertEqual(router.pendingRequestCount, 0)
+    }
+
     func testTerminalChoicesHaveExpectedBundleIdentifiers() {
         XCTAssertEqual(PreferredTerminalApplication.terminal.bundleIdentifier, "com.apple.Terminal")
         XCTAssertEqual(PreferredTerminalApplication.iTerm2.bundleIdentifier, "com.googlecode.iterm2")
@@ -50,5 +221,20 @@ final class ExternalIntegrationTests: XCTestCase {
         settings.preferredTerminalApplication = .warp
         XCTAssertEqual(service.selectedApplication, .warp)
         XCTAssertEqual(service.applicationName, "Warp")
+    }
+
+    @MainActor
+    private func waitUntil(
+        timeout: TimeInterval = 3,
+        condition: @escaping @MainActor () -> Bool
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            if Date() >= deadline {
+                XCTFail("Condition was not met before timeout")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(25))
+        }
     }
 }

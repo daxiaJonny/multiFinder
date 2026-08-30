@@ -16,7 +16,7 @@ final class DirectoryMonitor {
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: descriptor,
             eventMask: [.write, .delete, .rename, .attrib, .extend, .link, .revoke],
-            queue: DispatchQueue.global(qos: .utility)
+            queue: .main
         )
         source.setEventHandler {
             Task { @MainActor in

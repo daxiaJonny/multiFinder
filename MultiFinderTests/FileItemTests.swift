@@ -135,14 +135,13 @@ final class FileItemTests: XCTestCase {
         XCTAssertEqual(dropped.url.standardizedFileURL, file.standardizedFileURL)
     }
 
-    func testDroppedFileURLNativeProviderRoundTrip() async throws {
-        let file = temporaryDirectory.appendingPathComponent("native-drag.log")
+    func testExternalFileProviderUsesNativeFileURLRepresentation() async throws {
+        let file = temporaryDirectory.appendingPathComponent("external-drag.log")
         try Data("log".utf8).write(to: file)
-        let provider = NSItemProvider()
-        provider.register(DroppedFileURL(url: file))
+        let provider = try XCTUnwrap(NSItemProvider(contentsOf: file))
 
-        XCTAssertTrue(provider.registeredTypeIdentifiers.contains("com.multifinder.dragged-file-url"))
         XCTAssertTrue(provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier))
+        XCTAssertFalse(provider.registeredTypeIdentifiers.contains("com.multifinder.dragged-file-url"))
 
         let dropped: DroppedFileURL = try await withCheckedThrowingContinuation { continuation in
             _ = provider.loadTransferable(type: DroppedFileURL.self) { result in

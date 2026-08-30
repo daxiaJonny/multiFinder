@@ -2,13 +2,13 @@ import SwiftUI
 
 struct RenameSheet: View {
     let item: FileItem
-    @ObservedObject var viewModel: FileBrowserViewModel
+    let onRename: (String) -> Void
     @State private var newName: String
     @Environment(\.dismiss) private var dismiss
 
-    init(item: FileItem, viewModel: FileBrowserViewModel) {
+    init(item: FileItem, onRename: @escaping (String) -> Void) {
         self.item = item
-        self.viewModel = viewModel
+        self.onRename = onRename
         _newName = State(initialValue: item.name)
     }
 
@@ -53,7 +53,7 @@ struct RenameSheet: View {
             dismiss()
             return
         }
-        viewModel.rename(item: item, to: newName)
+        onRename(newName)
         dismiss()
     }
 

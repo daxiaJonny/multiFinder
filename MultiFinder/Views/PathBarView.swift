@@ -8,6 +8,8 @@ struct PathBarView: View {
     let onNavigate: (URL) -> Void
     let onNavigateToFile: (URL) -> Void
     let onRefresh: () -> Void
+    let canRemovePane: Bool
+    let onRemovePane: () -> Void
     let onTransferDroppedItems: ([URL], URL, FileDropOperation) -> Void
 
     @State private var isEditing = false
@@ -124,7 +126,20 @@ struct PathBarView: View {
                 .buttonStyle(.plain)
                 .help("Edit Path")
             }
+
+            if canRemovePane {
+                Button(action: onRemovePane) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .frame(width: 18, height: 18)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Remove Pane")
+                .help("Remove Pane")
+            }
         }
+        .padding(.trailing, 6)
         .foregroundStyle(.secondary)
     }
 

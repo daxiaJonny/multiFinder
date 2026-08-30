@@ -236,6 +236,19 @@ fileprivate enum FileOperationChange: Sendable {
     }
 }
 
+private enum ArchiveEntryKind: Sendable, Equatable {
+    case directory
+    case regular
+    case symbolicLink
+    case hardLink
+}
+
+private struct ArchiveEntry: Sendable {
+    let path: String
+    let kind: ArchiveEntryKind
+    let linkTarget: String?
+}
+
 @MainActor
 final class FileOperationService: ObservableObject {
     static let shared = FileOperationService()
@@ -619,6 +632,12 @@ final class FileOperationService: ObservableObject {
     }
 
     private func execute(_ request: FileOperationRequest) async -> ExecutionResult {
+        do {
+            try Self.preflightContainment(for: request)
+        } catch {
+            return Self.preflightFailureResult(for: request, error: error)
+        }
+
         switch request {
         case .copy(let sources, let destination, let policy):
             return await executeTransfers(sources, to: destination, kind: .copy, policy: policy)
@@ -639,6 +658,110 @@ final class FileOperationService: ObservableObject {
         case .aiOrganize(let operations, let scopeRoot):
             return await executeAIOrganize(operations, scopeRoot: scopeRoot)
         }
+    }
+
+    private nonisolated static func preflightContainment(for request: FileOperationRequest) throws {
+        switch request {
+        case .copy(let sources, let destination, _):
+            for source in sources {
+                try preflightContainment(
+                    source: source,
+                    destination: destination,
+                    kind: .copy
+                )
+            }
+        case .move(let sources, let destination, _):
+            for source in sources {
+                try preflightContainment(
+                    source: source,
+                    destination: destination,
+                    kind: .move
+                )
+            }
+        case .aiOrganize(let operations, let scopeRoot):
+            let resolve: (String) -> URL = {
+                scopeRoot.appendingPathComponent($0).standardizedFileURL
+            }
+            for operation in operations {
+                switch operation {
+                case .move(let source, let destination):
+                    try preflightContainment(
+                        source: resolve(source),
+                        destination: resolve(destination),
+                        kind: .move
+                    )
+                case .copy(let source, let destination):
+                    try preflightContainment(
+                        source: resolve(source),
+                        destination: resolve(destination),
+                        kind: .copy
+                    )
+                case .createFolder, .rename, .trash:
+                    continue
+                }
+            }
+        case .trash, .rename, .createFolder, .batchRename, .compress, .extract:
+            return
+        }
+    }
+
+    private nonisolated static func preflightContainment(
+        source: URL,
+        destination: URL,
+        kind: FileOperationKind
+    ) throws {
+        guard kind == .copy || kind == .move else { return }
+        guard isRealDirectory(at: source) else { return }
+
+        guard let sourcePath = resolvedContainmentPath(for: source),
+              let destinationPath = resolvedContainmentPath(for: destination) else {
+            throw FileOperationError(
+                message: L10n.format(
+                    "Could not verify that %@ is safe to copy or move.",
+                    source.lastPathComponent
+                )
+            )
+        }
+
+        guard !isSameOrDescendant(destinationPath, of: sourcePath) else {
+            throw FileOperationError(
+                message: L10n.format(
+                    "Cannot %@ “%@” into itself or one of its descendants.",
+                    kind.localizedName,
+                    source.lastPathComponent
+                )
+            )
+        }
+    }
+
+    private nonisolated static func preflightFailureResult(
+        for request: FileOperationRequest,
+        error: Error
+    ) -> ExecutionResult {
+        let sources: [URL]
+        switch request {
+        case .copy(let requestSources, _, _), .move(let requestSources, _, _):
+            sources = requestSources
+        case .aiOrganize(let operations, let scopeRoot):
+            sources = operations.map { aiOperationSource($0, scopeRoot: scopeRoot) }
+        default:
+            sources = []
+        }
+
+        let message = error.localizedDescription
+        return ExecutionResult(
+            status: .failed,
+            changes: [],
+            outcomes: sources.map { source in
+                FileItemOperationOutcome(
+                    source: source,
+                    destination: nil,
+                    status: .failed,
+                    errorMessage: message
+                )
+            },
+            errorMessage: message
+        )
     }
 
     private func executeTransfers(
@@ -1156,7 +1279,9 @@ final class FileOperationService: ObservableObject {
         }
 
         var replacing = false
-        if FileManager.default.fileExists(atPath: destination.path) {
+        let isCaseOnlyRename = kind == .rename &&
+            (try? Self.isCaseOnlyRename(source: source, destination: destination)) == true
+        if FileManager.default.fileExists(atPath: destination.path) && !isCaseOnlyRename {
             let resolution = await conflictResolution(
                 for: FileConflict(source: source, destination: destination, kind: kind),
                 policy: policy
@@ -1227,6 +1352,15 @@ final class FileOperationService: ObservableObject {
                     fileManager: fileManager
                 )
             case .move, .rename:
+                if kind == .rename, !replacing,
+                   (try? isCaseOnlyRename(source: source, destination: destination)) == true {
+                    try moveItemReliably(from: source, to: destination, fileManager: fileManager)
+                    return [.moved(
+                        from: source,
+                        to: destination,
+                        identity: try fileIdentity(at: destination)
+                    )]
+                }
                 return try performMove(
                     source: source,
                     destination: destination,
@@ -1283,7 +1417,8 @@ final class FileOperationService: ObservableObject {
         try await runWorker {
             let fileManager = FileManager.default
             try Task.checkCancellation()
-            if source.path.caseInsensitiveCompare(destination.path) != .orderedSame,
+            let isCaseOnlyRename = (try? isCaseOnlyRename(source: source, destination: destination)) == true
+            if !isCaseOnlyRename,
                fileManager.fileExists(atPath: destination.path) {
                 throw FileOperationError(
                     message: L10n.format(
@@ -1292,7 +1427,7 @@ final class FileOperationService: ObservableObject {
                     )
                 )
             }
-            try fileManager.moveItem(at: source, to: destination)
+            try moveItemReliably(from: source, to: destination, fileManager: fileManager)
             return .moved(from: source, to: destination, identity: try fileIdentity(at: destination))
         }
     }
@@ -1359,8 +1494,20 @@ final class FileOperationService: ObservableObject {
             try fileManager.createDirectory(at: staging, withIntermediateDirectories: false)
 
             if lowercased.hasSuffix(".zip") {
+                let entries = try inspectZipArchive(
+                    archive,
+                    staging: staging,
+                    fileManager: fileManager
+                )
+                try validateArchiveEntries(entries)
                 try runProcess("/usr/bin/ditto", arguments: ["-xk", archive.path, staging.path])
             } else if lowercased.hasSuffix(".tar") || lowercased.hasSuffix(".tar.gz") || lowercased.hasSuffix(".tgz") {
+                let entries = try inspectTarArchive(
+                    archive,
+                    staging: staging,
+                    fileManager: fileManager
+                )
+                try validateArchiveEntries(entries)
                 try runProcess("/usr/bin/tar", arguments: ["-xf", archive.path, "-C", staging.path])
             } else if lowercased.hasSuffix(".gz") {
                 let outputName = String(name.dropLast(3))
@@ -1382,6 +1529,7 @@ final class FileOperationService: ObservableObject {
             }
 
             try Task.checkCancellation()
+            try validateExtractedTree(at: staging, fileManager: fileManager)
             let destination = uniqueNumberedDestination(
                 in: directory,
                 baseName: extractionBaseName(for: archive),
@@ -1391,6 +1539,445 @@ final class FileOperationService: ObservableObject {
             try fileManager.moveItem(at: staging, to: destination)
             return .created(destination, identity: try fileIdentity(at: destination))
         }
+    }
+
+    private nonisolated static func inspectZipArchive(
+        _ archive: URL,
+        staging: URL,
+        fileManager: FileManager
+    ) throws -> [ArchiveEntry] {
+        let names = try processOutputData(
+            "/usr/bin/zipinfo",
+            arguments: ["-1", archive.path],
+            staging: staging,
+            fileManager: fileManager
+        )
+        let verbose = try processOutputData(
+            "/usr/bin/zipinfo",
+            arguments: ["-v", archive.path],
+            staging: staging,
+            fileManager: fileManager
+        )
+        let rawNames = try outputLines(from: names)
+        let kinds = try zipEntryKinds(from: verbose)
+        guard rawNames.count == kinds.count else {
+            throw archiveInspectionError()
+        }
+
+        var entries: [ArchiveEntry] = []
+        for index in rawNames.indices {
+            let rawPath = rawNames[index]
+            let kind = kinds[index] ?? (rawPath.hasSuffix("/") ? .directory : .regular)
+            if rawPath.hasSuffix("/") && kind != .directory {
+                throw archiveInspectionError()
+            }
+
+            guard let path = try normalizedArchivePath(rawPath) else {
+                guard kind == .directory else {
+                    throw unsafeArchiveEntryError(rawPath)
+                }
+                continue
+            }
+
+            var linkTarget: String?
+            if kind == .symbolicLink || kind == .hardLink {
+                let targetData = try processOutputData(
+                    "/usr/bin/unzip",
+                    arguments: ["-p", archive.path, rawPath],
+                    staging: staging,
+                    fileManager: fileManager
+                )
+                guard !targetData.isEmpty, targetData.count <= 4 * 1024,
+                      let target = String(data: targetData, encoding: .utf8) else {
+                    throw unsafeArchiveEntryError(rawPath)
+                }
+                linkTarget = target
+            }
+
+            entries.append(ArchiveEntry(path: path, kind: kind, linkTarget: linkTarget))
+        }
+        return entries
+    }
+
+    private nonisolated static func inspectTarArchive(
+        _ archive: URL,
+        staging: URL,
+        fileManager: FileManager
+    ) throws -> [ArchiveEntry] {
+        let namesData = try processOutputData(
+            "/usr/bin/tar",
+            arguments: ["-tf", archive.path],
+            staging: staging,
+            fileManager: fileManager
+        )
+        let verboseData = try processOutputData(
+            "/usr/bin/tar",
+            arguments: ["-tvf", archive.path],
+            staging: staging,
+            fileManager: fileManager
+        )
+        let rawNames = try outputLines(from: namesData)
+        let verboseLines = try outputLines(from: verboseData)
+        guard rawNames.count == verboseLines.count else {
+            throw archiveInspectionError()
+        }
+
+        var entries: [ArchiveEntry] = []
+        for index in rawNames.indices {
+            let rawPath = rawNames[index]
+            let detail = verboseLines[index]
+            guard let type = detail.first else {
+                throw archiveInspectionError()
+            }
+
+            let kind: ArchiveEntryKind
+            let linkTarget: String?
+            switch type {
+            case "d":
+                kind = .directory
+                linkTarget = nil
+            case "-":
+                kind = .regular
+                linkTarget = nil
+            case "l":
+                kind = .symbolicLink
+                guard let marker = detail.range(of: " -> ") else {
+                    throw archiveInspectionError()
+                }
+                let target = String(detail[marker.upperBound...])
+                guard !target.isEmpty else {
+                    throw unsafeArchiveEntryError(rawPath)
+                }
+                linkTarget = target
+            case "h":
+                kind = .hardLink
+                guard let marker = detail.range(of: " link to ") else {
+                    throw archiveInspectionError()
+                }
+                let target = String(detail[marker.upperBound...])
+                guard !target.isEmpty else {
+                    throw unsafeArchiveEntryError(rawPath)
+                }
+                linkTarget = target
+            default:
+                throw unsafeArchiveEntryError(rawPath)
+            }
+
+            guard let path = try normalizedArchivePath(rawPath) else {
+                guard kind == .directory else {
+                    throw unsafeArchiveEntryError(rawPath)
+                }
+                continue
+            }
+            entries.append(ArchiveEntry(path: path, kind: kind, linkTarget: linkTarget))
+        }
+        return entries
+    }
+
+    private nonisolated static func zipEntryKinds(from data: Data) throws -> [ArchiveEntryKind?] {
+        let lines = try outputLines(from: data)
+        var blocks: [[String]] = []
+        for line in lines {
+            if line.hasPrefix("Central directory entry #") {
+                blocks.append([])
+            } else if !blocks.isEmpty {
+                blocks[blocks.index(before: blocks.endIndex)].append(line)
+            }
+        }
+
+        return try blocks.map { block in
+            guard let attributesLine = block.first(where: {
+                $0.hasPrefix("  Unix file attributes (")
+            }) else {
+                return nil
+            }
+            guard let marker = attributesLine.range(of: "): ") else {
+                throw archiveInspectionError()
+            }
+            let mode = attributesLine[marker.upperBound...]
+                .trimmingCharacters(in: .whitespaces)
+            guard let type = mode.first else {
+                throw archiveInspectionError()
+            }
+            switch type {
+            case "d": return .directory
+            case "-": return .regular
+            case "l": return .symbolicLink
+            case "h": return .hardLink
+            default: throw archiveInspectionError()
+            }
+        }
+    }
+
+    private nonisolated static func validateArchiveEntries(_ entries: [ArchiveEntry]) throws {
+        var entriesByKey: [String: ArchiveEntry] = [:]
+        for entry in entries {
+            let key = archivePathKey(entry.path)
+            guard entriesByKey[key] == nil else {
+                throw unsafeArchiveEntryError(entry.path)
+            }
+            entriesByKey[key] = entry
+        }
+
+        for entry in entries {
+            switch entry.kind {
+            case .directory, .regular:
+                continue
+            case .symbolicLink:
+                guard let target = entry.linkTarget else {
+                    throw unsafeArchiveEntryError(entry.path)
+                }
+                let targetPath = try resolveArchiveRelativePath(
+                    from: archiveParentPath(entry.path),
+                    target: target,
+                    displayPath: entry.path
+                )
+                _ = try resolveArchivePath(
+                    targetPath,
+                    entriesByKey: entriesByKey,
+                    visited: []
+                )
+            case .hardLink:
+                guard let target = entry.linkTarget,
+                      let targetPath = try normalizedArchivePath(target) else {
+                    throw unsafeArchiveEntryError(entry.path)
+                }
+                guard let targetEntry = entriesByKey[archivePathKey(targetPath)],
+                      targetEntry.kind == .regular || targetEntry.kind == .hardLink else {
+                    throw unsafeArchiveEntryError(entry.path)
+                }
+                _ = try resolveArchivePath(
+                    targetPath,
+                    entriesByKey: entriesByKey,
+                    visited: []
+                )
+            }
+        }
+    }
+
+    private nonisolated static func resolveArchivePath(
+        _ path: String,
+        entriesByKey: [String: ArchiveEntry],
+        visited: Set<String>
+    ) throws -> String {
+        let components = path.isEmpty ? [] : path.split(separator: "/").map(String.init)
+        var resolved: [String] = []
+        var index = 0
+
+        while index < components.count {
+            let component = components[index]
+            let candidate = (resolved + [component]).joined(separator: "/")
+            if let entry = entriesByKey[archivePathKey(candidate)],
+               entry.kind == .symbolicLink {
+                let key = archivePathKey(entry.path)
+                guard !visited.contains(key), let target = entry.linkTarget else {
+                    throw unsafeArchiveEntryError(entry.path)
+                }
+                var nextVisited = visited
+                nextVisited.insert(key)
+                let targetPath = try resolveArchiveRelativePath(
+                    from: archiveParentPath(entry.path),
+                    target: target,
+                    displayPath: entry.path
+                )
+                let remainder = components.dropFirst(index + 1).joined(separator: "/")
+                let combined = targetPath.isEmpty
+                    ? remainder
+                    : remainder.isEmpty ? targetPath : "\(targetPath)/\(remainder)"
+                return try resolveArchivePath(
+                    combined,
+                    entriesByKey: entriesByKey,
+                    visited: nextVisited
+                )
+            }
+            resolved.append(component)
+            index += 1
+        }
+        return resolved.joined(separator: "/")
+    }
+
+    private nonisolated static func resolveArchiveRelativePath(
+        from parent: String,
+        target: String,
+        displayPath: String
+    ) throws -> String {
+        guard !target.isEmpty, !containsNUL(target), !isAbsoluteArchivePath(target) else {
+            throw unsafeArchiveEntryError(displayPath)
+        }
+
+        var components = parent.isEmpty ? [] : parent.split(separator: "/").map(String.init)
+        for component in target.split(separator: "/", omittingEmptySubsequences: true).map(String.init) {
+            if component == "." {
+                continue
+            }
+            if component == ".." {
+                guard !components.isEmpty else {
+                    throw unsafeArchiveEntryError(displayPath)
+                }
+                components.removeLast()
+            } else {
+                components.append(component)
+            }
+        }
+        return components.joined(separator: "/")
+    }
+
+    private nonisolated static func normalizedArchivePath(_ rawPath: String) throws -> String? {
+        guard !rawPath.isEmpty, !containsNUL(rawPath), !isAbsoluteArchivePath(rawPath) else {
+            throw unsafeArchiveEntryError(rawPath)
+        }
+
+        var components: [String] = []
+        for component in rawPath.split(separator: "/", omittingEmptySubsequences: true).map(String.init) {
+            if component == "." {
+                continue
+            }
+            if component == ".." {
+                guard !components.isEmpty else {
+                    throw unsafeArchiveEntryError(rawPath)
+                }
+                components.removeLast()
+            } else {
+                components.append(component)
+            }
+        }
+        return components.isEmpty ? nil : components.joined(separator: "/")
+    }
+
+    private nonisolated static func validateExtractedTree(
+        at root: URL,
+        fileManager: FileManager
+    ) throws {
+        guard let rootPath = realPath(of: root) else {
+            throw archiveInspectionError()
+        }
+        guard let enumerator = fileManager.enumerator(
+            at: root,
+            includingPropertiesForKeys: nil,
+            options: []
+        ) else {
+            return
+        }
+
+        for case let url as URL in enumerator {
+            let path = url.standardizedFileURL.path
+            let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
+            guard path.hasPrefix(prefix) else {
+                throw unsafeArchiveEntryError(path)
+            }
+            let relativePath = String(path.dropFirst(prefix.count))
+            var metadata = stat()
+            let result = url.withUnsafeFileSystemRepresentation { filePath in
+                guard let filePath else { return Int32(-1) }
+                return lstat(filePath, &metadata)
+            }
+            guard result == 0 else {
+                throw archiveInspectionError()
+            }
+
+            let fileType = metadata.st_mode & S_IFMT
+            guard fileType == S_IFLNK else {
+                guard fileType == S_IFDIR || fileType == S_IFREG else {
+                    throw unsafeArchiveEntryError(relativePath)
+                }
+                continue
+            }
+            let target = try fileManager.destinationOfSymbolicLink(atPath: path)
+            let targetPath = try resolveArchiveRelativePath(
+                from: archiveParentPath(relativePath),
+                target: target,
+                displayPath: relativePath
+            )
+            let targetURL = targetPath.isEmpty
+                ? root
+                : root.appendingPathComponent(targetPath)
+            if let resolvedTargetPath = realPath(of: targetURL),
+               !isSameOrDescendant(resolvedTargetPath, of: rootPath) {
+                throw unsafeArchiveEntryError(relativePath)
+            }
+        }
+    }
+
+    private nonisolated static func processOutputData(
+        _ launchPath: String,
+        arguments: [String],
+        staging: URL,
+        fileManager: FileManager
+    ) throws -> Data {
+        let outputURL = staging.appendingPathComponent(
+            ".multifinder-archive-output-\(UUID().uuidString)"
+        )
+        guard fileManager.createFile(atPath: outputURL.path, contents: nil) else {
+            throw FileOperationError(
+                message: L10n.format("Could not create %@.", outputURL.lastPathComponent)
+            )
+        }
+        defer { try? fileManager.removeItem(at: outputURL) }
+        let output = try FileHandle(forWritingTo: outputURL)
+        do {
+            try runProcess(
+                launchPath,
+                arguments: arguments,
+                standardOutput: output
+            )
+            try output.close()
+        } catch {
+            try? output.close()
+            throw error
+        }
+        return try Data(contentsOf: outputURL)
+    }
+
+    private nonisolated static func outputLines(from data: Data) throws -> [String] {
+        guard let text = String(data: data, encoding: .utf8), !containsNUL(text) else {
+            throw archiveInspectionError()
+        }
+        var lines = text.components(separatedBy: "\n")
+        if lines.last == "" {
+            lines.removeLast()
+        }
+        return lines.map { line in
+            line.hasSuffix("\r") ? String(line.dropLast()) : line
+        }
+    }
+
+    private nonisolated static func archiveInspectionError() -> FileOperationError {
+        FileOperationError(message: L10n.string("The archive could not be inspected safely."))
+    }
+
+    private nonisolated static func unsafeArchiveEntryError(_ path: String) -> FileOperationError {
+        FileOperationError(
+            message: L10n.format("The archive contains an unsafe item: %@", path)
+        )
+    }
+
+    private nonisolated static func archiveParentPath(_ path: String) -> String {
+        guard let separator = path.lastIndex(of: "/") else { return "" }
+        return String(path[..<separator])
+    }
+
+    private nonisolated static func archivePathKey(_ path: String) -> String {
+        path.precomposedStringWithCanonicalMapping.lowercased()
+    }
+
+    private nonisolated static func containsNUL(_ value: String) -> Bool {
+        value.unicodeScalars.contains { $0.value == 0 }
+    }
+
+    private nonisolated static func isAbsoluteArchivePath(_ path: String) -> Bool {
+        let bytes = Array(path.utf8)
+        guard let first = bytes.first else { return false }
+        if first == 47 || first == 92 {
+            return true
+        }
+        guard bytes.count >= 3,
+              ((bytes[0] >= 65 && bytes[0] <= 90) ||
+               (bytes[0] >= 97 && bytes[0] <= 122)),
+              bytes[1] == 58,
+              bytes[2] == 47 || bytes[2] == 92 else {
+            return false
+        }
+        return true
     }
 
     private nonisolated static func uniqueNumberedDestination(
@@ -1411,7 +1998,7 @@ final class FileOperationService: ObservableObject {
         }
     }
 
-    private nonisolated static func runProcess(
+    nonisolated static func runProcess(
         _ launchPath: String,
         arguments: [String],
         currentDirectory: URL? = nil,
@@ -1430,16 +2017,85 @@ final class FileOperationService: ObservableObject {
         }
         try process.run()
 
-        while process.isRunning {
-            if Task.isCancelled {
+        let errorFileHandle = errorPipe.fileHandleForReading
+        let errorFileDescriptor = errorFileHandle.fileDescriptor
+        var errorData = Data()
+        var errorPipeClosed = false
+        var terminationRequested = false
+        var cancellationRequested = false
+        var pollError: Error?
+        var buffer = [UInt8](repeating: 0, count: 16 * 1024)
+
+        while process.isRunning || !errorPipeClosed {
+            if Task.isCancelled && process.isRunning && !terminationRequested {
                 process.terminate()
-                process.waitUntilExit()
-                throw CancellationError()
+                terminationRequested = true
+                cancellationRequested = true
             }
-            usleep(50_000)
+
+            if errorPipeClosed {
+                // The child closed stderr before it exited. Keep observing its
+                // lifetime without polling a closed descriptor.
+                usleep(50_000)
+                continue
+            }
+
+            var descriptor = pollfd(
+                fd: errorFileDescriptor,
+                events: Int16(POLLIN | POLLHUP),
+                revents: 0
+            )
+            let pollResult = Darwin.poll(&descriptor, 1, 50)
+            if pollResult < 0 {
+                if errno == EINTR {
+                    continue
+                }
+                pollError = NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                if !terminationRequested {
+                    process.terminate()
+                    terminationRequested = true
+                }
+                try? errorFileHandle.close()
+                errorPipeClosed = true
+                break
+            }
+            guard pollResult > 0 else { continue }
+
+            let bytesRead = buffer.withUnsafeMutableBytes { rawBuffer in
+                Darwin.read(
+                    errorFileDescriptor,
+                    rawBuffer.baseAddress,
+                    rawBuffer.count
+                )
+            }
+            if bytesRead > 0 {
+                errorData.append(contentsOf: buffer.prefix(bytesRead))
+            } else if bytesRead == 0 {
+                errorPipeClosed = true
+            } else if errno != EINTR {
+                pollError = NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                if !terminationRequested {
+                    process.terminate()
+                    terminationRequested = true
+                }
+                try? errorFileHandle.close()
+                errorPipeClosed = true
+                break
+            }
         }
 
-        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        // On the normal path the pipe is drained before waiting, so a verbose
+        // child cannot remain blocked on stderr while Process waits for it.
+        process.waitUntilExit()
+        try? errorFileHandle.close()
+
+        if cancellationRequested {
+            throw CancellationError()
+        }
+        if let pollError {
+            throw pollError
+        }
+
         guard process.terminationStatus == 0 else {
             let toolMessage = String(data: errorData, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1473,7 +2129,9 @@ final class FileOperationService: ObservableObject {
                     guard currentIdentity == expectedIdentity else {
                         throw identityMismatchError(at: to)
                     }
-                    if try fileIdentityIfPresent(at: from) != nil {
+                    if let existingAtFrom = try fileIdentityIfPresent(at: from),
+                       existingAtFrom != expectedIdentity ||
+                        (try? isCaseOnlyRename(source: to, destination: from)) != true {
                         throw FileOperationError(
                             message: L10n.format(
                                 "Cannot restore %@ because an item already exists there.",
@@ -1481,7 +2139,7 @@ final class FileOperationService: ObservableObject {
                             )
                         )
                     }
-                    try fileManager.moveItem(at: to, to: from)
+                    try moveItemReliably(from: to, to: from, fileManager: fileManager)
                 case .trashed(let original, let trashed, let expectedIdentity):
                     guard let currentIdentity = try fileIdentityIfPresent(at: trashed) else {
                         if try fileIdentityIfPresent(at: original) == expectedIdentity { continue }
@@ -1845,10 +2503,134 @@ final class FileOperationService: ObservableObject {
         }
     }
 
+    private nonisolated static func moveItemReliably(
+        from source: URL,
+        to destination: URL,
+        fileManager: FileManager
+    ) throws {
+        if try isCaseOnlyRename(source: source, destination: destination) {
+            try performCaseOnlyRename(
+                from: source,
+                to: destination,
+                fileManager: fileManager
+            )
+        } else {
+            try fileManager.moveItem(at: source, to: destination)
+        }
+    }
+
+    private nonisolated static func isCaseOnlyRename(
+        source: URL,
+        destination: URL
+    ) throws -> Bool {
+        let sourcePath = source.standardizedFileURL.path
+        let destinationPath = destination.standardizedFileURL.path
+        guard sourcePath != destinationPath,
+              sourcePath.caseInsensitiveCompare(destinationPath) == .orderedSame else {
+            return false
+        }
+
+        guard (try? source.resourceValues(
+            forKeys: [.volumeSupportsCaseSensitiveNamesKey]
+        ).volumeSupportsCaseSensitiveNames) == false else {
+            return false
+        }
+
+        return try fileIdentity(at: source) == fileIdentity(at: destination)
+    }
+
+    private nonisolated static func performCaseOnlyRename(
+        from source: URL,
+        to destination: URL,
+        fileManager: FileManager
+    ) throws {
+        let sourceIdentity = try fileIdentity(at: source)
+        let temporary = temporarySibling(of: source, role: "rename")
+        var sourceWasMoved = false
+
+        defer {
+            if fileManager.fileExists(atPath: temporary.path),
+               !fileManager.fileExists(atPath: source.path) {
+                try? fileManager.moveItem(at: temporary, to: source)
+            }
+        }
+
+        try Task.checkCancellation()
+        try fileManager.moveItem(at: source, to: temporary)
+        sourceWasMoved = true
+
+        do {
+            try Task.checkCancellation()
+            try fileManager.moveItem(at: temporary, to: destination)
+            guard try fileIdentity(at: destination) == sourceIdentity else {
+                throw FileOperationError(
+                    message: L10n.string("The renamed item could not be identified.")
+                )
+            }
+        } catch {
+            if sourceWasMoved,
+               fileManager.fileExists(atPath: temporary.path),
+               !fileManager.fileExists(atPath: source.path) {
+                try? fileManager.moveItem(at: temporary, to: source)
+            }
+            throw error
+        }
+    }
+
     private nonisolated static func temporarySibling(of destination: URL, role: String) -> URL {
         destination.deletingLastPathComponent().appendingPathComponent(
             ".multifinder-\(role)-\(UUID().uuidString)"
         )
+    }
+
+    private nonisolated static func isRealDirectory(at url: URL) -> Bool {
+        var metadata = stat()
+        return url.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return false }
+            guard lstat(path, &metadata) == 0 else { return false }
+            return (metadata.st_mode & S_IFMT) == S_IFDIR
+        }
+    }
+
+    private nonisolated static func resolvedContainmentPath(for url: URL) -> String? {
+        if let resolvedPath = realPath(of: url) {
+            return resolvedPath
+        }
+
+        var unresolvedComponents: [String] = []
+        var existingURL = url
+        while realPath(of: existingURL) == nil {
+            let parentURL = existingURL.deletingLastPathComponent()
+            guard parentURL.path != existingURL.path,
+                  !existingURL.lastPathComponent.isEmpty else {
+                return nil
+            }
+            unresolvedComponents.insert(existingURL.lastPathComponent, at: 0)
+            existingURL = parentURL
+        }
+
+        guard var resolvedPath = realPath(of: existingURL) else { return nil }
+        for component in unresolvedComponents {
+            resolvedPath = (resolvedPath as NSString).appendingPathComponent(component)
+        }
+        return resolvedPath
+    }
+
+    private nonisolated static func realPath(of url: URL) -> String? {
+        guard url.isFileURL else { return nil }
+        return url.withUnsafeFileSystemRepresentation { path in
+            guard let path, let resolvedPath = realpath(path, nil) else { return nil }
+            defer { free(resolvedPath) }
+            return String(cString: resolvedPath)
+        }
+    }
+
+    private nonisolated static func isSameOrDescendant(_ candidate: String, of source: String) -> Bool {
+        guard candidate != source else { return true }
+        if source == "/" {
+            return candidate.hasPrefix("/")
+        }
+        return candidate.hasPrefix(source.hasSuffix("/") ? source : source + "/")
     }
 
     private nonisolated static func runWorker<T: Sendable>(

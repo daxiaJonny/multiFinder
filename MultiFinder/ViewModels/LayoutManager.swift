@@ -1,4 +1,5 @@
 import Combine
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -54,9 +55,43 @@ struct TabState: Codable, Equatable, Sendable {
     let location: BrowserLocation
     let sortField: SortField
     let sortAscending: Bool
+    let viewMode: BrowserViewMode
     let showHiddenFiles: Bool
     let backHistory: [BrowserLocation]
     let forwardHistory: [BrowserLocation]
+
+    init(
+        location: BrowserLocation,
+        sortField: SortField,
+        sortAscending: Bool,
+        viewMode: BrowserViewMode = .list,
+        showHiddenFiles: Bool,
+        backHistory: [BrowserLocation],
+        forwardHistory: [BrowserLocation]
+    ) {
+        self.location = location
+        self.sortField = sortField
+        self.sortAscending = sortAscending
+        self.viewMode = viewMode
+        self.showHiddenFiles = showHiddenFiles
+        self.backHistory = backHistory
+        self.forwardHistory = forwardHistory
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case location, sortField, sortAscending, viewMode, showHiddenFiles, backHistory, forwardHistory
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        location = try container.decode(BrowserLocation.self, forKey: .location)
+        sortField = try container.decode(SortField.self, forKey: .sortField)
+        sortAscending = try container.decode(Bool.self, forKey: .sortAscending)
+        viewMode = try container.decodeIfPresent(BrowserViewMode.self, forKey: .viewMode) ?? .list
+        showHiddenFiles = try container.decode(Bool.self, forKey: .showHiddenFiles)
+        backHistory = try container.decodeIfPresent([BrowserLocation].self, forKey: .backHistory) ?? []
+        forwardHistory = try container.decodeIfPresent([BrowserLocation].self, forKey: .forwardHistory) ?? []
+    }
 }
 
 struct PaneState: Codable, Equatable, Sendable {
@@ -108,22 +143,30 @@ struct RowState: Codable, Equatable, Sendable {
 }
 
 struct LayoutState: Codable, Equatable, Sendable {
-    static let currentVersion = 4
+    static let currentVersion = 6
 
     let version: Int
     let rows: [RowState]
     let focusedIndex: Int
     let sidebarWidth: Double
+    let showSidebar: Bool
 
-    init(version: Int, rows: [RowState], focusedIndex: Int, sidebarWidth: Double = 160) {
+    init(
+        version: Int,
+        rows: [RowState],
+        focusedIndex: Int,
+        sidebarWidth: Double = 160,
+        showSidebar: Bool = true
+    ) {
         self.version = version
         self.rows = rows
         self.focusedIndex = focusedIndex
         self.sidebarWidth = sidebarWidth
+        self.showSidebar = showSidebar
     }
 
     private enum CodingKeys: String, CodingKey {
-        case version, rows, focusedIndex, sidebarWidth
+        case version, rows, focusedIndex, sidebarWidth, showSidebar
     }
 
     init(from decoder: Decoder) throws {
@@ -132,6 +175,7 @@ struct LayoutState: Codable, Equatable, Sendable {
         rows = try container.decode([RowState].self, forKey: .rows)
         focusedIndex = try container.decode(Int.self, forKey: .focusedIndex)
         sidebarWidth = try container.decodeIfPresent(Double.self, forKey: .sidebarWidth) ?? 160
+        showSidebar = try container.decodeIfPresent(Bool.self, forKey: .showSidebar) ?? true
     }
 }
 
@@ -145,23 +189,37 @@ final class LayoutManager: ObservableObject {
     }
     @Published private(set) var serializedState: String
     @Published var sidebarWidth: Double
+    @Published var isSidebarVisible: Bool {
+        didSet {
+            if oldValue != isSidebarVisible { save() }
+        }
+    }
+    @Published var isGoToFolderPresented = false
     @Published private(set) var highlightedPaneID: UUID? = nil
+    weak var workspaceWindow: NSWindow?
 
+    private let packageOpener: (URL) -> Bool
     private var highlightTask: Task<Void, Never>?
 
-    init(serializedState: String = "") {
+    init(
+        serializedState: String = "",
+        packageOpener: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) {
         self.serializedState = serializedState
+        self.packageOpener = packageOpener
 
         if let state = Self.decode(serializedState), let restored = Self.restore(state) {
             rows = restored.rows
             focusedPaneID = restored.focusedPaneID
             sidebarWidth = restored.sidebarWidth
+            isSidebarVisible = restored.isSidebarVisible
         } else {
             let firstPane = BrowserPane(tab: FileBrowserViewModel())
             let secondPane = BrowserPane(tab: FileBrowserViewModel())
             rows = [PaneRow(panes: [firstPane, secondPane])]
             focusedPaneID = firstPane.id
             sidebarWidth = 160
+            isSidebarVisible = true
         }
 
         save()
@@ -180,14 +238,154 @@ final class LayoutManager: ObservableObject {
         rows.reduce(0) { $0 + $1.panes.count }
     }
 
+    var canGoBack: Bool {
+        focusedPane?.canGoBack == true
+    }
+
+    var canGoForward: Bool {
+        focusedPane?.canGoForward == true
+    }
+
+    var canGoUp: Bool {
+        focusedPane?.canGoUp == true
+    }
+
+    func toggleSidebar() {
+        isSidebarVisible.toggle()
+    }
+
+    func presentGoToFolder() {
+        isGoToFolderPresented = true
+    }
+
+    func dismissGoToFolder() {
+        isGoToFolderPresented = false
+    }
+
+    @discardableResult
+    func goToFolder(_ input: String) -> Bool {
+        guard let pane = focusedPane else { return false }
+        let trimmedInput = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedInput.isEmpty else {
+            pane.errorMessage = L10n.string("Enter a folder path.")
+            return false
+        }
+
+        let expandedPath = (trimmedInput as NSString).expandingTildeInPath
+        let pathURL: URL
+        if expandedPath.hasPrefix("/") {
+            pathURL = URL(fileURLWithPath: expandedPath).standardizedFileURL
+        } else if let currentURL = pane.currentURL {
+            pathURL = currentURL.appendingPathComponent(expandedPath).standardizedFileURL
+        } else {
+            pathURL = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(expandedPath)
+                .standardizedFileURL
+        }
+
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: pathURL.path, isDirectory: &isDirectory) else {
+            pane.errorMessage = L10n.format("“%@” does not exist.", pathURL.path)
+            return false
+        }
+
+        pane.errorMessage = nil
+        if isDirectory.boolValue {
+            pane.navigate(to: .directory(pathURL))
+        } else {
+            pane.navigateToFile(pathURL)
+        }
+        return true
+    }
+
     @discardableResult
     func openExternalPath(_ url: URL) -> Bool {
-        let targetURL = url.standardizedFileURL
+        openExternalPaths([url])
+    }
+
+    @discardableResult
+    func openExternalPaths(_ urls: [URL]) -> Bool {
+        enum ExternalOpenAction {
+            case package(URL)
+            case directory(URL)
+            case files(parent: URL, urls: [URL])
+        }
+
+        var actions: [ExternalOpenAction] = []
+        var fileActionIndexes: [URL: Int] = [:]
+        var seenURLs = Set<URL>()
+
+        for url in urls {
+            let targetURL = url.standardizedFileURL
+            guard seenURLs.insert(targetURL).inserted else { continue }
+
+            var isDirectory: ObjCBool = false
+            guard targetURL.isFileURL,
+                  FileManager.default.fileExists(atPath: targetURL.path, isDirectory: &isDirectory) else {
+                focusedPane?.errorMessage = L10n.string("The requested path does not exist.")
+                continue
+            }
+
+            let isPackage = isDirectory.boolValue && (try? targetURL.resourceValues(
+                forKeys: [.isPackageKey]
+            ).isPackage) == true
+            if isPackage {
+                actions.append(.package(targetURL))
+            } else if isDirectory.boolValue {
+                actions.append(.directory(targetURL))
+            } else {
+                let parentURL = targetURL.deletingLastPathComponent().standardizedFileURL
+                if let actionIndex = fileActionIndexes[parentURL],
+                   case .files(let parent, var fileURLs) = actions[actionIndex] {
+                    fileURLs.append(targetURL)
+                    actions[actionIndex] = .files(parent: parent, urls: fileURLs)
+                } else {
+                    fileActionIndexes[parentURL] = actions.count
+                    actions.append(.files(parent: parentURL, urls: [targetURL]))
+                }
+            }
+        }
+
+        var didOpenAny = false
+        for action in actions {
+            switch action {
+            case .package(let targetURL):
+                if packageOpener(targetURL) {
+                    didOpenAny = true
+                } else {
+                    focusedPane?.errorMessage = L10n.format(
+                        "Could not open “%@”.",
+                        targetURL.lastPathComponent
+                    )
+                }
+            case .directory(let targetURL):
+                didOpenAny = openExternalDirectory(targetURL) || didOpenAny
+            case .files(let parentURL, let fileURLs):
+                didOpenAny = openExternalFiles(fileURLs, in: parentURL) || didOpenAny
+            }
+        }
+
+        return didOpenAny
+    }
+
+    @discardableResult
+    private func openExternalDirectory(_ targetURL: URL) -> Bool {
         var isDirectory: ObjCBool = false
         guard targetURL.isFileURL,
               FileManager.default.fileExists(atPath: targetURL.path, isDirectory: &isDirectory) else {
             focusedPane?.errorMessage = L10n.string("The requested path does not exist.")
             return false
+        }
+
+        let isPackage = isDirectory.boolValue && (try? targetURL.resourceValues(
+            forKeys: [.isPackageKey]
+        ).isPackage) == true
+        if isPackage {
+            guard packageOpener(targetURL) else {
+                focusedPane?.errorMessage = L10n.format("Could not open “%@”.", targetURL.lastPathComponent)
+                return false
+            }
+            return true
         }
 
         if isDirectory.boolValue,
@@ -220,6 +418,27 @@ final class LayoutManager: ObservableObject {
         } else {
             newPane.navigateToFile(targetURL)
         }
+        save()
+        return true
+    }
+
+    @discardableResult
+    private func openExternalFiles(_ fileURLs: [URL], in parentURL: URL) -> Bool {
+        guard !fileURLs.isEmpty else { return false }
+
+        if let match = firstTab(where: { $0.currentURL == parentURL }) {
+            let tab = match.pane.tabs[match.tabIndex]
+            guard tab.revealFiles(fileURLs) else { return false }
+            match.pane.selectedTabIndex = match.tabIndex
+            focusAndHighlight(match.pane)
+            save()
+            return true
+        }
+
+        guard let sourcePaneID = focusedPaneID ?? allPanes.first?.id else { return false }
+        addPaneRight(of: sourcePaneID)
+        guard let newPane = focusedPane else { return false }
+        guard newPane.revealFiles(fileURLs) else { return false }
         save()
         return true
     }
@@ -284,6 +503,9 @@ final class LayoutManager: ObservableObject {
 
     func removePane(_ paneID: UUID) {
         guard totalPaneCount > 1, let location = findPaneLocation(id: paneID) else { return }
+        let nextFocusedPaneID = focusedPaneID == paneID
+            ? focusCandidateAfterRemovingPane(at: location)
+            : nil
         let removedWeight = rows[location.rowIndex].paneWeights.remove(at: location.paneIndex)
         rows[location.rowIndex].panes.remove(at: location.paneIndex)
         if rows[location.rowIndex].panes.isEmpty {
@@ -298,14 +520,19 @@ final class LayoutManager: ObservableObject {
             normalizePaneWeights(rowIndex: location.rowIndex)
         }
         if focusedPaneID == paneID {
-            focusedPaneID = rows.lazy.flatMap(\.panes).first?.id
+            focusedPaneID = nextFocusedPaneID ?? rows.lazy.flatMap(\.panes).first?.id
         }
         save()
     }
 
+    var closeTarget: WorkspaceCloseTarget {
+        guard let pane = focusedBrowserPane else { return .window }
+        if pane.tabs.count > 1 { return .tab }
+        return totalPaneCount > 1 ? .pane : .window
+    }
+
     var canCloseTab: Bool {
-        guard let pane = focusedBrowserPane else { return false }
-        return pane.tabs.count > 1 || totalPaneCount > 1
+        closeTarget == .tab
     }
 
     func newTab(in paneID: UUID) {
@@ -500,6 +727,7 @@ final class LayoutManager: ObservableObject {
         guard let restored = Self.restore(state) else { return false }
         rows = restored.rows
         sidebarWidth = restored.sidebarWidth
+        isSidebarVisible = restored.isSidebarVisible
         focusedPaneID = restored.focusedPaneID
         save()
         return true
@@ -519,6 +747,7 @@ final class LayoutManager: ObservableObject {
                             location: tab.location,
                             sortField: tab.sortField,
                             sortAscending: tab.sortAscending,
+                            viewMode: tab.viewMode,
                             showHiddenFiles: tab.showHiddenFiles,
                             backHistory: tab.backHistory,
                             forwardHistory: tab.forwardHistory
@@ -533,7 +762,8 @@ final class LayoutManager: ObservableObject {
             version: LayoutState.currentVersion,
             rows: rowStates,
             focusedIndex: focusedIndex,
-            sidebarWidth: sidebarWidth
+            sidebarWidth: sidebarWidth,
+            showSidebar: isSidebarVisible
         )
     }
 
@@ -548,6 +778,7 @@ final class LayoutManager: ObservableObject {
                                 location: tab.location,
                                 sortField: tab.sortField,
                                 sortAscending: tab.sortAscending,
+                                viewMode: tab.viewMode,
                                 showHiddenFiles: tab.showHiddenFiles,
                                 backHistory: [],
                                 forwardHistory: []
@@ -564,7 +795,8 @@ final class LayoutManager: ObservableObject {
             version: LayoutState.currentVersion,
             rows: rows,
             focusedIndex: currentState.focusedIndex,
-            sidebarWidth: currentState.sidebarWidth
+            sidebarWidth: currentState.sidebarWidth,
+            showSidebar: currentState.showSidebar
         )
     }
 
@@ -596,6 +828,7 @@ final class LayoutManager: ObservableObject {
             location: tab?.location ?? .directory(FileManager.default.homeDirectoryForCurrentUser),
             sortField: tab?.sortField ?? .name,
             sortAscending: tab?.sortAscending ?? true,
+            viewMode: tab?.viewMode ?? .list,
             showHiddenFiles: tab?.showHiddenFiles ?? AppSettings.shared.showHiddenFilesByDefault
         )
     }
@@ -664,7 +897,12 @@ final class LayoutManager: ObservableObject {
         }
     }
 
-    private static func restore(_ state: LayoutState) -> (rows: [PaneRow], focusedPaneID: UUID?, sidebarWidth: Double)? {
+    private static func restore(_ state: LayoutState) -> (
+        rows: [PaneRow],
+        focusedPaneID: UUID?,
+        sidebarWidth: Double,
+        isSidebarVisible: Bool
+    )? {
         var allPanes: [BrowserPane] = []
         let rows = state.rows.compactMap { rowState -> PaneRow? in
             let panes = rowState.panes.compactMap { paneState -> BrowserPane? in
@@ -673,6 +911,7 @@ final class LayoutManager: ObservableObject {
                         location: sanitized(tabState.location),
                         sortField: tabState.sortField,
                         sortAscending: tabState.sortAscending,
+                        viewMode: tabState.viewMode,
                         showHiddenFiles: tabState.showHiddenFiles,
                         backHistory: tabState.backHistory.map(sanitized),
                         forwardHistory: tabState.forwardHistory.map(sanitized)
@@ -694,7 +933,12 @@ final class LayoutManager: ObservableObject {
         let focusedPaneID = allPanes.indices.contains(state.focusedIndex)
             ? allPanes[state.focusedIndex].id
             : allPanes.first?.id
-        return (rows, focusedPaneID, min(max(state.sidebarWidth, 110), 360))
+        return (
+            rows,
+            focusedPaneID,
+            min(max(state.sidebarWidth, 110), 360),
+            state.showSidebar
+        )
     }
 
     private static func sanitized(_ location: BrowserLocation) -> BrowserLocation {
@@ -711,6 +955,28 @@ final class LayoutManager: ObservableObject {
         rows[rowIndex].paneWeights[paneIndex] = existingWeight / 2
         let insertionIndex = insertAfter ? paneIndex + 1 : paneIndex
         rows[rowIndex].paneWeights.insert(existingWeight / 2, at: insertionIndex)
+    }
+
+    private func focusCandidateAfterRemovingPane(
+        at location: (rowIndex: Int, paneIndex: Int)
+    ) -> UUID? {
+        let row = rows[location.rowIndex]
+        if row.panes.count > 1 {
+            let candidateIndex = location.paneIndex < row.panes.count - 1
+                ? location.paneIndex + 1
+                : location.paneIndex - 1
+            return row.panes[candidateIndex].id
+        }
+
+        if location.rowIndex < rows.count - 1 {
+            let nextRow = rows[location.rowIndex + 1]
+            return nextRow.panes[min(location.paneIndex, nextRow.panes.count - 1)].id
+        }
+        if location.rowIndex > 0 {
+            let previousRow = rows[location.rowIndex - 1]
+            return previousRow.panes[min(location.paneIndex, previousRow.panes.count - 1)].id
+        }
+        return nil
     }
 
     private func normalizePaneWeights(rowIndex: Int) {
@@ -736,6 +1002,12 @@ final class LayoutManager: ObservableObject {
 
 enum FocusDirection {
     case left, right, up, down
+}
+
+enum WorkspaceCloseTarget: Equatable {
+    case tab
+    case pane
+    case window
 }
 
 struct LayoutManagerKey: FocusedValueKey {

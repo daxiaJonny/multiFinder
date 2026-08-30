@@ -12,6 +12,7 @@ final class LayoutManagerTests: XCTestCase {
 
         pane.loadRecents()
         pane.sortOrder = [FileItemComparator(field: .date, order: .reverse)]
+        pane.viewMode = .icon
         pane.showHiddenFiles = true
         manager.save()
 
@@ -25,6 +26,7 @@ final class LayoutManagerTests: XCTestCase {
         XCTAssertNil(restoredPane.currentURL)
         XCTAssertEqual(restoredPane.sortField, .date)
         XCTAssertFalse(restoredPane.sortAscending)
+        XCTAssertEqual(restoredPane.viewMode, .icon)
         XCTAssertTrue(restoredPane.showHiddenFiles)
         XCTAssertFalse(restoredPane.backHistory.isEmpty)
     }
@@ -40,6 +42,7 @@ final class LayoutManagerTests: XCTestCase {
                                 location: .search(SearchQuery(text: "swift", scope: URL(fileURLWithPath: "/tmp"))),
                                 sortField: .kind,
                                 sortAscending: false,
+                                viewMode: .icon,
                                 showHiddenFiles: true,
                                 backHistory: [.recents],
                                 forwardHistory: [.directory(URL(fileURLWithPath: "/"))]
@@ -62,6 +65,131 @@ final class LayoutManagerTests: XCTestCase {
 
         let encoded = try XCTUnwrap(LayoutManager.encode(state))
         XCTAssertEqual(LayoutManager.decode(encoded), state)
+    }
+
+    func testSidebarVisibilityPersistsAndLegacyLayoutsShowIt() throws {
+        let manager = LayoutManager()
+        manager.isSidebarVisible = false
+        manager.save()
+
+        let restored = LayoutManager(serializedState: manager.serializedState)
+        XCTAssertFalse(restored.isSidebarVisible)
+        XCTAssertFalse(restored.makeState().showSidebar)
+
+        let legacyJSON = """
+        {
+          "version": 5,
+          "rows": [{
+            "panes": [{
+              "tabs": [{
+                "location": {"recents": {}},
+                "sortField": "Name",
+                "sortAscending": true,
+                "showHiddenFiles": false,
+                "backHistory": [],
+                "forwardHistory": []
+              }],
+              "selectedTabIndex": 0
+            }],
+            "paneWeights": [1],
+            "heightWeight": 1
+          }],
+          "focusedIndex": 0,
+          "sidebarWidth": 160
+        }
+        """
+
+        let encodedLegacy = Data(legacyJSON.utf8).base64EncodedString()
+        let legacyState = try XCTUnwrap(LayoutManager.decode(encodedLegacy))
+        XCTAssertTrue(legacyState.showSidebar)
+        XCTAssertTrue(LayoutManager(serializedState: encodedLegacy).isSidebarVisible)
+    }
+
+    func testNavigationCapabilitiesFollowFocusedPaneHistory() throws {
+        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
+        let root = URL(fileURLWithPath: "/")
+        let state = LayoutState(
+            version: LayoutState.currentVersion,
+            rows: [RowState(panes: [PaneState(tabs: [TabState(
+                location: .directory(root),
+                sortField: .name,
+                sortAscending: true,
+                showHiddenFiles: false,
+                backHistory: [.directory(home)],
+                forwardHistory: []
+            )])])],
+            focusedIndex: 0
+        )
+        let encoded = try XCTUnwrap(LayoutManager.encode(state))
+        let manager = LayoutManager(serializedState: encoded)
+        let pane = try XCTUnwrap(manager.focusedPane)
+
+        XCTAssertTrue(manager.canGoBack)
+        XCTAssertFalse(manager.canGoForward)
+        XCTAssertFalse(manager.canGoUp)
+
+        pane.goBack()
+
+        XCTAssertFalse(manager.canGoBack)
+        XCTAssertTrue(manager.canGoForward)
+        XCTAssertTrue(manager.canGoUp)
+    }
+
+    func testGoToFolderExpandsTildeAndRevealsFile() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("readme.txt")
+        try Data("read me".utf8).write(to: file)
+
+        let manager = LayoutManager()
+        let pane = try XCTUnwrap(manager.focusedPane)
+
+        XCTAssertTrue(manager.goToFolder("~"))
+        XCTAssertEqual(pane.currentURL, FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL)
+
+        XCTAssertTrue(manager.goToFolder(directory.path))
+        XCTAssertEqual(pane.currentURL, directory)
+        try await waitUntil { !pane.isLoading }
+
+        XCTAssertTrue(manager.goToFolder(file.path))
+        XCTAssertEqual(pane.currentURL, directory)
+        try await waitUntil {
+            !pane.isLoading && pane.selectedItemURLs == [file.standardizedFileURL]
+        }
+
+        XCTAssertFalse(manager.goToFolder(directory.appendingPathComponent("missing").path))
+    }
+
+    func testVersionFourLayoutDefaultsToListView() throws {
+        let legacyJSON = """
+        {
+          "version": 4,
+          "rows": [{
+            "panes": [{
+              "tabs": [{
+                "location": {"recents": {}},
+                "sortField": "Name",
+                "sortAscending": true,
+                "showHiddenFiles": false,
+                "backHistory": [],
+                "forwardHistory": []
+              }],
+              "selectedTabIndex": 0
+            }],
+            "paneWeights": [1],
+            "heightWeight": 1
+          }],
+          "focusedIndex": 0,
+          "sidebarWidth": 160
+        }
+        """
+        let encoded = Data(legacyJSON.utf8).base64EncodedString()
+
+        let decoded = try XCTUnwrap(LayoutManager.decode(encoded))
+        let restored = LayoutManager(serializedState: encoded)
+
+        XCTAssertEqual(decoded.rows[0].panes[0].tabs[0].viewMode, .list)
+        XCTAssertEqual(restored.focusedPane?.viewMode, .list)
     }
 
     func testWeightedLayoutRoundTripPreservesSidebarPaneAndRowSizing() throws {
@@ -255,6 +383,23 @@ final class LayoutManagerTests: XCTestCase {
         XCTAssertNotNil(manager.focusedPane?.errorMessage)
     }
 
+    func testExternalPackageOpensWithWorkspaceWithoutAddingPane() throws {
+        let package = try makeTemporaryDirectory().appendingPathComponent("Example.app")
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: package.deletingLastPathComponent()) }
+
+        var openedPackages: [URL] = []
+        let manager = LayoutManager(packageOpener: { url in
+            openedPackages.append(url)
+            return true
+        })
+
+        XCTAssertTrue(manager.openExternalPath(package))
+        XCTAssertEqual(openedPackages, [package.standardizedFileURL])
+        XCTAssertEqual(manager.totalPaneCount, 2)
+        XCTAssertNotEqual(manager.focusedPane?.currentURL, package.standardizedFileURL)
+    }
+
     func testNewTabDuplicatesCurrentLocationAndSelectsIt() throws {
         let manager = LayoutManager()
         let pane = try XCTUnwrap(manager.focusedBrowserPane)
@@ -289,6 +434,40 @@ final class LayoutManagerTests: XCTestCase {
         XCTAssertEqual(manager.totalPaneCount, 1)
         XCTAssertNil(manager.findPane(id: pane.id))
         XCTAssertNotNil(manager.focusedPane)
+    }
+
+    func testCloseTargetDistinguishesTabPaneAndWindow() throws {
+        let manager = LayoutManager()
+        let focusedPaneID = try XCTUnwrap(manager.focusedPaneID)
+
+        XCTAssertEqual(manager.closeTarget, .pane)
+        XCTAssertFalse(manager.canCloseTab)
+
+        manager.newTab(in: focusedPaneID)
+        XCTAssertEqual(manager.closeTarget, .tab)
+        XCTAssertTrue(manager.canCloseTab)
+
+        manager.closeTab(in: focusedPaneID)
+        XCTAssertEqual(manager.closeTarget, .pane)
+
+        let otherPaneID = try XCTUnwrap(
+            manager.rows[0].panes.first(where: { $0.id != focusedPaneID })?.id
+        )
+        manager.removePane(otherPaneID)
+        XCTAssertEqual(manager.closeTarget, .window)
+        XCTAssertFalse(manager.canCloseTab)
+    }
+
+    func testRemovingFocusedMiddlePaneFocusesAdjacentPane() throws {
+        let manager = LayoutManager()
+        let firstPaneID = try XCTUnwrap(manager.focusedPaneID)
+        let originalRightPaneID = manager.rows[0].panes[1].id
+        manager.addPaneRight(of: firstPaneID)
+        let middlePaneID = try XCTUnwrap(manager.focusedPaneID)
+
+        manager.removePane(middlePaneID)
+
+        XCTAssertEqual(manager.focusedPaneID, originalRightPaneID)
     }
 
     func testClosingOnlyTabOfOnlyPaneKeepsPane() throws {

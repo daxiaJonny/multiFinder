@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import XCTest
 @testable import MultiFinder
@@ -125,6 +126,24 @@ final class FileBrowserViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSetSortUsesRequestedFieldAndDirection() async throws {
+        try Data(repeating: 0, count: 1).write(
+            to: temporaryDirectory.appendingPathComponent("small.txt")
+        )
+        try Data(repeating: 0, count: 10).write(
+            to: temporaryDirectory.appendingPathComponent("large.txt")
+        )
+        let viewModel = FileBrowserViewModel(location: .directory(temporaryDirectory))
+        try await waitUntil { !viewModel.isLoading && viewModel.items.count == 2 }
+
+        viewModel.setSort(by: .size, ascending: false)
+
+        XCTAssertEqual(viewModel.sortField, .size)
+        XCTAssertFalse(viewModel.sortAscending)
+        XCTAssertEqual(viewModel.items.map(\.name), ["large.txt", "small.txt"])
+    }
+
+    @MainActor
     func testFilterMatchesCaseAndDiacriticsAndLimitsSelectAll() async throws {
         try Data().write(to: temporaryDirectory.appendingPathComponent("Résumé.txt"))
         try Data().write(to: temporaryDirectory.appendingPathComponent("REPORT.log"))
@@ -146,6 +165,26 @@ final class FileBrowserViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testInfoPresentationRequiresSelectionAndClosesOnNavigation() async throws {
+        let file = temporaryDirectory.appendingPathComponent("notes.txt")
+        let child = temporaryDirectory.appendingPathComponent("child", isDirectory: true)
+        try Data().write(to: file)
+        try FileManager.default.createDirectory(at: child, withIntermediateDirectories: false)
+        let viewModel = FileBrowserViewModel(location: .directory(temporaryDirectory))
+        try await waitUntil { !viewModel.isLoading }
+
+        viewModel.presentInfo()
+        XCTAssertFalse(viewModel.isInfoPresented)
+
+        viewModel.selectedItems = [file.standardizedFileURL]
+        viewModel.presentInfo()
+        XCTAssertTrue(viewModel.isInfoPresented)
+
+        viewModel.navigate(to: child)
+        XCTAssertFalse(viewModel.isInfoPresented)
+    }
+
+    @MainActor
     func testNavigationClearsFilter() async throws {
         let child = temporaryDirectory.appendingPathComponent("child", isDirectory: true)
         try FileManager.default.createDirectory(at: child, withIntermediateDirectories: false)
@@ -156,6 +195,58 @@ final class FileBrowserViewModelTests: XCTestCase {
         viewModel.navigate(to: child)
 
         XCTAssertEqual(viewModel.filterText, "")
+    }
+
+    @MainActor
+    func testNavigateToMissingFileKeepsCurrentLocationAndHistory() async throws {
+        let viewModel = FileBrowserViewModel(location: .directory(temporaryDirectory))
+        try await waitUntil { !viewModel.isLoading }
+        let missingFile = temporaryDirectory.appendingPathComponent("missing.txt")
+
+        viewModel.navigateToFile(missingFile)
+
+        XCTAssertEqual(viewModel.location, .directory(temporaryDirectory.standardizedFileURL))
+        XCTAssertTrue(viewModel.backHistory.isEmpty)
+        XCTAssertTrue(viewModel.forwardHistory.isEmpty)
+        XCTAssertEqual(
+            viewModel.errorMessage,
+            L10n.format("“%@” does not exist.", "missing.txt")
+        )
+        XCTAssertTrue(viewModel.selectedItems.isEmpty)
+    }
+
+    @MainActor
+    func testNavigateToFileAcceptsAnExistingDirectory() async throws {
+        let child = temporaryDirectory.appendingPathComponent("child", isDirectory: true)
+        try FileManager.default.createDirectory(at: child, withIntermediateDirectories: false)
+        let viewModel = FileBrowserViewModel(location: .directory(temporaryDirectory))
+        try await waitUntil { !viewModel.isLoading }
+
+        viewModel.navigateToFile(child)
+
+        try await waitUntil { !viewModel.isLoading }
+        XCTAssertEqual(viewModel.location, .directory(child.standardizedFileURL))
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    @MainActor
+    func testRevealFilesSelectsAllFilesAndClearsCurrentFilter() async throws {
+        let first = temporaryDirectory.appendingPathComponent("first.txt")
+        let second = temporaryDirectory.appendingPathComponent("second.txt")
+        try Data().write(to: first)
+        try Data().write(to: second)
+        let viewModel = FileBrowserViewModel(location: .directory(temporaryDirectory))
+        try await waitUntil { !viewModel.isLoading }
+        viewModel.filterText = "does-not-match"
+
+        XCTAssertTrue(viewModel.revealFiles([first, second]))
+        let expected = Set([first.standardizedFileURL, second.standardizedFileURL])
+        try await waitUntil {
+            !viewModel.isLoading
+                && viewModel.filterText.isEmpty
+                && viewModel.selectedItems == expected
+        }
+        XCTAssertEqual(viewModel.visibleItems.map(\.url), [first.standardizedFileURL, second.standardizedFileURL])
     }
 
     @MainActor
@@ -225,6 +316,110 @@ final class FileBrowserViewModelTests: XCTestCase {
             !viewModel.isLoading && viewModel.selectedItems == expected
         }
         XCTAssertEqual(viewModel.filterText, "")
+    }
+
+    @MainActor
+    func testDuplicateSelectedCreatesUniqueCopyAndSelectsIt() async throws {
+        let source = temporaryDirectory.appendingPathComponent("notes.txt").standardizedFileURL
+        try Data("notes".utf8).write(to: source)
+        let existingCopy = FileOperationService.uniqueDestination(
+            for: source,
+            in: temporaryDirectory
+        )
+        try Data("existing".utf8).write(to: existingCopy)
+        let expectedCopy = FileOperationService.uniqueDestination(
+            for: source,
+            in: temporaryDirectory
+        ).standardizedFileURL
+        let viewModel = FileBrowserViewModel(
+            location: .directory(temporaryDirectory),
+            operationService: FileOperationService()
+        )
+        try await waitUntil { !viewModel.isLoading && viewModel.items.count == 2 }
+        viewModel.selectedItems = [source]
+
+        viewModel.duplicateSelected()
+
+        try await waitUntil {
+            !viewModel.isLoading && viewModel.selectedItems == [expectedCopy]
+        }
+        XCTAssertEqual(try String(contentsOf: source), "notes")
+        XCTAssertEqual(try String(contentsOf: existingCopy), "existing")
+        XCTAssertEqual(try String(contentsOf: expectedCopy), "notes")
+    }
+
+    @MainActor
+    func testRenameKeepsPublishedSelectionValidAndRebuildsTable() async throws {
+        let source = temporaryDirectory.appendingPathComponent("draft.txt").standardizedFileURL
+        let destination = temporaryDirectory.appendingPathComponent("final.txt").standardizedFileURL
+        try Data("draft".utf8).write(to: source)
+        let viewModel = FileBrowserViewModel(
+            location: .directory(temporaryDirectory),
+            operationService: FileOperationService()
+        )
+        try await waitUntil { !viewModel.isLoading && viewModel.items.count == 1 }
+        viewModel.selectedItems = [source]
+        let initialRevision = viewModel.tableRevision
+        var publishedInvalidSelection = false
+        let cancellable = viewModel.$items.dropFirst().sink { updatedItems in
+            let updatedIDs = Set(updatedItems.map(\.id))
+            if !viewModel.selectedItems.isSubset(of: updatedIDs) {
+                publishedInvalidSelection = true
+            }
+        }
+
+        viewModel.rename(item: try XCTUnwrap(viewModel.selectedItem), to: destination.lastPathComponent)
+
+        try await waitUntil {
+            !viewModel.isLoading
+                && viewModel.items.map(\.id) == [destination]
+                && viewModel.selectedItems == [destination]
+        }
+        withExtendedLifetime(cancellable) {}
+        XCTAssertFalse(publishedInvalidSelection)
+        XCTAssertGreaterThan(viewModel.tableRevision, initialRevision)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
+    }
+
+    @MainActor
+    func testExternalRowIdentityChangesRebuildTable() async throws {
+        let viewModel = FileBrowserViewModel(location: .directory(temporaryDirectory))
+        try await waitUntil { !viewModel.isLoading }
+        let initialRevision = viewModel.tableRevision
+        let addedFile = temporaryDirectory.appendingPathComponent("added.txt")
+        try Data().write(to: addedFile)
+
+        viewModel.refresh()
+
+        try await waitUntil {
+            !viewModel.isLoading && viewModel.items.map(\.name) == ["added.txt"]
+        }
+        XCTAssertGreaterThan(viewModel.tableRevision, initialRevision)
+        let revisionAfterAddition = viewModel.tableRevision
+        try FileManager.default.removeItem(at: addedFile)
+
+        viewModel.refresh()
+
+        try await waitUntil { !viewModel.isLoading && viewModel.items.isEmpty }
+        XCTAssertGreaterThan(viewModel.tableRevision, revisionAfterAddition)
+    }
+
+    @MainActor
+    func testMetadataChangeRebuildsVisibleRows() async throws {
+        let file = temporaryDirectory.appendingPathComponent("changing.txt")
+        try Data("a".utf8).write(to: file)
+        let viewModel = FileBrowserViewModel(location: .directory(temporaryDirectory))
+        try await waitUntil { !viewModel.isLoading && viewModel.items.first?.size == 1 }
+        let initialRevision = viewModel.tableRevision
+
+        try Data("updated contents".utf8).write(to: file)
+        viewModel.refresh()
+
+        try await waitUntil {
+            !viewModel.isLoading && viewModel.items.first?.size == 16
+        }
+        XCTAssertGreaterThan(viewModel.tableRevision, initialRevision)
     }
 
     @MainActor
@@ -388,6 +583,118 @@ final class FileBrowserViewModelTests: XCTestCase {
         )
         XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: target.appendingPathComponent("notes.txt").path))
+    }
+
+    @MainActor
+    func testPasteDestinationUsesTheRightClickedFolderOrCurrentDirectory() async throws {
+        let source = temporaryDirectory.appendingPathComponent("source.txt")
+        let folder = temporaryDirectory.appendingPathComponent("Target", isDirectory: true)
+        try Data("source".utf8).write(to: source)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+
+        let viewModel = FileBrowserViewModel(location: .directory(temporaryDirectory))
+        try await waitUntil { !viewModel.isLoading && viewModel.items.count == 2 }
+
+        XCTAssertEqual(viewModel.pasteDestination(for: [folder]), folder.standardizedFileURL)
+        XCTAssertEqual(viewModel.pasteDestination(for: [source]), temporaryDirectory.standardizedFileURL)
+        XCTAssertEqual(viewModel.pasteDestination(for: []), temporaryDirectory.standardizedFileURL)
+    }
+
+    @MainActor
+    func testCopyItemsCanPasteIntoTheRequestedFolder() async throws {
+        let source = temporaryDirectory.appendingPathComponent("source.txt")
+        let folder = temporaryDirectory.appendingPathComponent("Target", isDirectory: true)
+        let pasted = folder.appendingPathComponent(source.lastPathComponent)
+        try Data("source".utf8).write(to: source)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+
+        let viewModel = FileBrowserViewModel(
+            location: .directory(temporaryDirectory),
+            operationService: FileOperationService()
+        )
+        try await waitUntil { !viewModel.isLoading && viewModel.items.count == 2 }
+
+        viewModel.copyItems(from: [source], to: folder)
+
+        try await waitUntil { FileManager.default.fileExists(atPath: pasted.path) }
+        XCTAssertEqual(try String(contentsOf: pasted), "source")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+    }
+
+    @MainActor
+    func testPasteDestinationRejectsReadOnlyAndNonDirectoryTargets() async throws {
+        let readOnlyFolder = temporaryDirectory.appendingPathComponent("ReadOnly", isDirectory: true)
+        let file = temporaryDirectory.appendingPathComponent("file.txt")
+        try FileManager.default.createDirectory(at: readOnlyFolder, withIntermediateDirectories: false)
+        try Data().write(to: file)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: 0o555)],
+            ofItemAtPath: readOnlyFolder.path
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: NSNumber(value: 0o755)],
+                ofItemAtPath: readOnlyFolder.path
+            )
+        }
+
+        let viewModel = FileBrowserViewModel(location: .directory(temporaryDirectory))
+        try await waitUntil { !viewModel.isLoading && viewModel.items.count == 2 }
+
+        XCTAssertFalse(FileBrowserViewModel.isWritableOrdinaryDirectory(readOnlyFolder))
+        XCTAssertNil(viewModel.pasteDestination(for: [readOnlyFolder]))
+        XCTAssertEqual(viewModel.pasteDestination(for: [file]), temporaryDirectory.standardizedFileURL)
+    }
+
+    func testDropOperationUsesMoveOnTheSameVolumeAndCopyForOption() throws {
+        let source = temporaryDirectory.appendingPathComponent("source.txt")
+        let destination = temporaryDirectory.appendingPathComponent("Target", isDirectory: true)
+        try Data().write(to: source)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
+
+        XCTAssertEqual(
+            FileBrowserViewModel.dropOperation(
+                for: [source],
+                into: destination,
+                optionPressed: false
+            ),
+            .move
+        )
+        XCTAssertEqual(
+            FileBrowserViewModel.dropOperation(
+                for: [source],
+                into: destination,
+                optionPressed: true
+            ),
+            .copy
+        )
+    }
+
+    func testDropOperationFallsBackToCopyWhenAVolumeCannotBeResolved() {
+        let source = temporaryDirectory.appendingPathComponent("missing-source")
+        let destination = temporaryDirectory.appendingPathComponent("Target", isDirectory: true)
+
+        XCTAssertEqual(
+            FileBrowserViewModel.dropOperation(
+                for: [source],
+                into: destination,
+                optionPressed: false
+            ),
+            .copy
+        )
+    }
+
+    func testMultiFileDragPayloadRoundTripsAllFileURLs() throws {
+        let urls = [
+            temporaryDirectory.appendingPathComponent("first.txt"),
+            temporaryDirectory.appendingPathComponent("second folder", isDirectory: true)
+        ]
+        let data = try XCTUnwrap(DroppedFileURL.batchData(for: urls))
+
+        XCTAssertEqual(
+            DroppedFileURL.urls(fromBatchData: data),
+            urls.map(\.standardizedFileURL)
+        )
     }
 
     @MainActor
