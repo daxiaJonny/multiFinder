@@ -7,6 +7,7 @@ struct FileListView: View {
     @ObservedObject var viewModel: FileBrowserViewModel
     @ObservedObject private var clipboard = FileClipboard.shared
     @State private var inlineRenameRequest: FileTableRenameRequest?
+    @StateObject private var inlineRenameState = FileTableRenameState()
     let canTransferToAdjacentPane: ([URL], FileDropOperation) -> Bool
     let onFocus: () -> Void
     let onBeginFiltering: () -> Void
@@ -23,20 +24,7 @@ struct FileListView: View {
             sortOrder: focusedSortOrder
         ) {
             TableColumn("Name", sortUsing: FileItemComparator(field: .name)) { item in
-                HStack(spacing: 6) {
-                    Image(nsImage: IconCache.shared.icon(for: item.url.path))
-                        .resizable()
-                        .interpolation(.high)
-                        .frame(width: 16, height: 16)
-                    Text(item.name)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    if item.isSymlink {
-                        Image(systemName: "arrowshape.turn.up.right")
-                            .font(.system(size: 8))
-                            .foregroundStyle(.tertiary)
-                    }
-                }
+                FileTableNameCell(item: item, renameState: inlineRenameState)
             }
             .width(min: 140, ideal: 280)
 
@@ -88,6 +76,12 @@ struct FileListView: View {
             FileTableClickMonitor(
                 items: viewModel.visibleItems,
                 renameRequest: inlineRenameRequest,
+                onEditingItemChange: { itemID in
+                    // Editing can also end during an NSViewRepresentable update.
+                    DispatchQueue.main.async {
+                        inlineRenameState.itemID = itemID
+                    }
+                },
                 onRename: { item, newName in
                     viewModel.rename(item: item, to: newName)
                 },
@@ -414,6 +408,35 @@ struct FileListView: View {
     }
 }
 
+private final class FileTableRenameState: ObservableObject {
+    @Published var itemID: FileItem.ID?
+}
+
+private struct FileTableNameCell: View {
+    let item: FileItem
+    // Table caches its cell content, so each cell must observe editing directly.
+    @ObservedObject var renameState: FileTableRenameState
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(nsImage: IconCache.shared.icon(for: item.url.path))
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 16, height: 16)
+            Text(item.name)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .opacity(renameState.itemID == item.id ? 0 : 1)
+                .accessibilityHidden(renameState.itemID == item.id)
+            if item.isSymlink {
+                Image(systemName: "arrowshape.turn.up.right")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+}
+
 private struct FileTableRenameRequest: Equatable {
     let id = UUID()
     let itemID: FileItem.ID
@@ -422,6 +445,7 @@ private struct FileTableRenameRequest: Equatable {
 private struct FileTableClickMonitor: NSViewRepresentable {
     let items: [FileItem]
     let renameRequest: FileTableRenameRequest?
+    let onEditingItemChange: (FileItem.ID?) -> Void
     let onRename: (FileItem, String) -> Void
     let onContextMenuItem: (FileItem) -> Void
     let onBlankContextMenu: () -> Void
@@ -429,6 +453,7 @@ private struct FileTableClickMonitor: NSViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             items: items,
+            onEditingItemChange: onEditingItemChange,
             onRename: onRename,
             onContextMenuItem: onContextMenuItem,
             onBlankContextMenu: onBlankContextMenu
@@ -444,6 +469,7 @@ private struct FileTableClickMonitor: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.items = items
+        context.coordinator.onEditingItemChange = onEditingItemChange
         context.coordinator.onRename = onRename
         context.coordinator.onContextMenuItem = onContextMenuItem
         context.coordinator.onBlankContextMenu = onBlankContextMenu
@@ -459,6 +485,7 @@ private struct FileTableClickMonitor: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextFieldDelegate {
         weak var anchorView: NSView?
         var items: [FileItem]
+        var onEditingItemChange: (FileItem.ID?) -> Void
         var onRename: (FileItem, String) -> Void
         var onContextMenuItem: (FileItem) -> Void
         var onBlankContextMenu: () -> Void
@@ -476,11 +503,13 @@ private struct FileTableClickMonitor: NSViewRepresentable {
 
         init(
             items: [FileItem],
+            onEditingItemChange: @escaping (FileItem.ID?) -> Void,
             onRename: @escaping (FileItem, String) -> Void,
             onContextMenuItem: @escaping (FileItem) -> Void,
             onBlankContextMenu: @escaping () -> Void
         ) {
             self.items = items
+            self.onEditingItemChange = onEditingItemChange
             self.onRename = onRename
             self.onContextMenuItem = onContextMenuItem
             self.onBlankContextMenu = onBlankContextMenu
@@ -660,33 +689,60 @@ private struct FileTableClickMonitor: NSViewRepresentable {
                       makeIfNecessary: false
                   ) else { return }
 
-            let editorOriginX: CGFloat = 19
-            let editor = NSTextField(frame: NSRect(
-                x: editorOriginX,
-                y: 2,
-                width: max(cellView.bounds.width - editorOriginX - 4, 48),
-                height: max(cellView.bounds.height - 4, 18)
-            ))
+            let editor = NSTextField(frame: .zero)
             editor.stringValue = item.name
             editor.font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
             editor.isEditable = true
             editor.isSelectable = true
+            editor.isBezeled = false
             editor.isBordered = true
-            editor.isBezeled = true
-            editor.bezelStyle = .roundedBezel
             editor.drawsBackground = true
             editor.backgroundColor = .textBackgroundColor
-            editor.focusRingType = .exterior
+            editor.textColor = .textColor
+            editor.focusRingType = .none
+            editor.cell?.backgroundStyle = .normal
             editor.delegate = self
             editor.setAccessibilityElement(true)
             editor.setAccessibilityRole(.textField)
             editor.setAccessibilityLabel(L10n.string("Name"))
 
+            let editorHeight = editor.intrinsicContentSize.height
+            editor.frame = NSRect(
+                x: 0,
+                y: cellView.bounds.midY - editorHeight / 2,
+                width: cellView.bounds.width,
+                height: editorHeight
+            )
             inlineEditor = editor
             inlineEditorItem = item
+            onEditingItemChange(item.id)
             cellView.addSubview(editor, positioned: .above, relativeTo: nil)
             editor.selectText(nil)
+            alignEditor(editor, in: cellView)
             selectEditableName(for: item, in: editor)
+        }
+
+        private func alignEditor(_ editor: NSTextField, in cellView: NSView) {
+            guard let fieldEditor = editor.currentEditor() as? NSTextView,
+                  let container = fieldEditor.textContainer,
+                  let layoutManager = fieldEditor.layoutManager else { return }
+
+            layoutManager.ensureLayout(for: container)
+            let origin = fieldEditor.textContainerOrigin
+            let textBounds = layoutManager.usedRect(for: container)
+                .offsetBy(dx: origin.x, dy: origin.y)
+            let textFrame = fieldEditor.convert(textBounds, to: cellView)
+            let textStart = fieldEditor.convert(NSPoint(
+                x: origin.x + container.lineFragmentPadding,
+                y: origin.y
+            ), to: cellView)
+
+            // Match the 16-point icon plus 6-point spacing, including native editor insets.
+            var frame = editor.frame
+            frame.origin.x += 16 + 6 - textStart.x
+            frame.origin.y += cellView.bounds.midY - textFrame.midY
+            frame.size.width = max(cellView.bounds.maxX - frame.minX - 4, 48)
+            editor.frame = frame
         }
 
         private func startEditing(itemID: FileItem.ID) {
@@ -709,6 +765,9 @@ private struct FileTableClickMonitor: NSViewRepresentable {
 
         private func selectEditableName(for item: FileItem, in editor: NSTextField) {
             guard let fieldEditor = editor.currentEditor() as? NSTextView else { return }
+            fieldEditor.drawsBackground = true
+            fieldEditor.backgroundColor = .textBackgroundColor
+            fieldEditor.textColor = .textColor
             let name = item.name as NSString
             var selectionLength = name.length
             if !item.isDirectory {
@@ -737,6 +796,7 @@ private struct FileTableClickMonitor: NSViewRepresentable {
             editor.removeFromSuperview()
             inlineEditor = nil
             inlineEditorItem = nil
+            onEditingItemChange(nil)
             isFinishingEditing = false
 
             guard commit, let item, newName != item.name else { return }
