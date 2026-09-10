@@ -112,7 +112,7 @@ struct SidebarView: View {
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
-            .background(Color(nsColor: .underPageBackgroundColor))
+            .background(Color(nsColor: .windowBackgroundColor))
         }
         .frame(minWidth: 100, maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {

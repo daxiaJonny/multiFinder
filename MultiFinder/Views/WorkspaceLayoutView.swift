@@ -111,40 +111,63 @@ private struct SplitResizeHandle: View {
     let onDelta: (Double) -> Void
     let onCommit: () -> Void
 
+    @State private var isHovering = false
+    @State private var isDragging = false
     @State private var previousTranslation: Double = 0
 
     var body: some View {
-        Rectangle()
-            .fill(Color(nsColor: .separatorColor).opacity(0.35))
-            .frame(
-                width: axis == .vertical ? 7 : nil,
-                height: axis == .horizontal ? 7 : nil
-            )
-            .contentShape(Rectangle())
-            .onHover { hovering in
-                if hovering {
-                    cursor.push()
-                } else {
-                    NSCursor.pop()
-                }
+        ZStack {
+            Color.clear
+                .frame(
+                    width: axis == .vertical ? 7 : nil,
+                    height: axis == .horizontal ? 7 : nil
+                )
+
+            Rectangle()
+                .fill(
+                    isDragging
+                        ? MFDTheme.primaryAccent
+                        : (isHovering ? MFDTheme.primaryAccent.opacity(0.7) : MFDTheme.subtleHairline)
+                )
+                .frame(
+                    width: axis == .vertical ? (isHovering || isDragging ? 2 : 1) : nil,
+                    height: axis == .horizontal ? (isHovering || isDragging ? 2 : 1) : nil
+                )
+        }
+        .frame(
+            width: axis == .vertical ? 7 : nil,
+            height: axis == .horizontal ? 7 : nil
+        )
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            isHovering = hovering
+            if hovering {
+                cursor.push()
+            } else {
+                NSCursor.pop()
             }
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        let translation = axis == .vertical
-                            ? value.translation.width
-                            : value.translation.height
-                        onDelta(translation - previousTranslation)
-                        previousTranslation = translation
-                    }
-                    .onEnded { _ in
-                        previousTranslation = 0
-                        onCommit()
-                    }
-            )
-            .accessibilityLabel(resizeLabel)
-            .accessibilityHint("Drag to resize")
-            .help(resizeLabel)
+        }
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    isDragging = true
+                    let translation = axis == .vertical
+                        ? value.translation.width
+                        : value.translation.height
+                    onDelta(translation - previousTranslation)
+                    previousTranslation = translation
+                }
+                .onEnded { _ in
+                    isDragging = false
+                    previousTranslation = 0
+                    onCommit()
+                }
+        )
+        .animation(.easeInOut(duration: 0.15), value: isHovering)
+        .animation(.easeInOut(duration: 0.15), value: isDragging)
+        .accessibilityLabel(resizeLabel)
+        .accessibilityHint("Drag to resize")
+        .help(resizeLabel)
     }
 
     private var cursor: NSCursor {
@@ -157,3 +180,4 @@ private struct SplitResizeHandle: View {
             : L10n.string("Resize Rows")
     }
 }
+

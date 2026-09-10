@@ -3,8 +3,11 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct PathBarView: View {
+    @ObservedObject var viewModel: FileBrowserViewModel
     let location: BrowserLocation
     let isFocused: Bool
+    @FocusState.Binding var isFilterFocused: Bool
+    let onFocus: () -> Void
     let onNavigate: (URL) -> Void
     let onNavigateToFile: (URL) -> Void
     let onRefresh: () -> Void
@@ -33,41 +36,46 @@ struct PathBarView: View {
         Group {
             if isEditing {
                 editField
+            } else if isFilterFocused || viewModel.isFiltering {
+                filterHeader
             } else if case .directory = location {
-                breadcrumb
+                breadcrumbHeader
             } else {
                 specialLocationHeader
             }
         }
-        .background(
-            isFocused
-                ? Color(nsColor: .underPageBackgroundColor)
-                : Color(nsColor: .windowBackgroundColor)
-        )
+        .frame(height: 32)
+        .background(isFocused ? MFDTheme.paneHeaderBackground : MFDTheme.paneHeaderBackground.opacity(0.6))
     }
 
-    private var breadcrumb: some View {
-        HStack(spacing: 0) {
+    // MARK: - Breadcrumb Header
+
+    private var breadcrumbHeader: some View {
+        HStack(spacing: 4) {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 1) {
+                HStack(spacing: 2) {
                     ForEach(Array(pathComponents.enumerated()), id: \.offset) { index, component in
-                        Button(action: { onNavigate(component.url) }) {
+                        let isLast = index == pathComponents.count - 1
+                        Button(action: {
+                            onFocus()
+                            onNavigate(component.url)
+                        }) {
                             HStack(spacing: 3) {
                                 if index == 0 {
-                                    Image(systemName: "macwindow")
+                                    Image(systemName: "laptopcomputer")
                                         .font(.system(size: 10))
                                 }
                                 Text(component.name)
-                                    .font(.system(size: 12))
+                                    .font(.system(size: 11, weight: isLast ? .semibold : .regular))
                                     .lineLimit(1)
                             }
                             .padding(.horizontal, 6)
                             .padding(.vertical, 3)
                             .background(
-                                RoundedRectangle(cornerRadius: 4)
+                                RoundedRectangle(cornerRadius: 5)
                                     .fill(breadcrumbBackground(for: component.url, at: index))
                             )
-                            .foregroundStyle(index == pathComponents.count - 1 ? Color.accentColor : .secondary)
+                            .foregroundStyle(isLast ? MFDTheme.primaryAccent : (isFocused ? .primary : .secondary))
                         }
                         .buttonStyle(.plain)
                         .onDrop(
@@ -81,39 +89,175 @@ struct PathBarView: View {
 
                         if index < pathComponents.count - 1 {
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 8, weight: .semibold))
+                                .font(.system(size: 7, weight: .bold))
                                 .foregroundStyle(.tertiary)
                         }
                     }
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, 4)
             }
+
+            Spacer(minLength: 4)
+
+            filterToggleButton
+
+            viewModePicker
 
             controls(canEdit: true)
         }
-        .padding(.vertical, 5)
+        .padding(.horizontal, 6)
         .onTapGesture(count: 2, perform: startEditing)
     }
+
+    // MARK: - Filter Header
+
+    private var filterHeader: some View {
+        HStack(spacing: 6) {
+            if let currentFolder = pathComponents.last {
+                HStack(spacing: 4) {
+                    Image(systemName: "folder.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(MFDTheme.primaryAccent)
+                    Text(currentFolder.name)
+                        .font(.system(size: 11, weight: .semibold))
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(MFDTheme.breadcrumbPillBackground)
+                )
+            } else if case .recents = location {
+                HStack(spacing: 4) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 10))
+                        .foregroundStyle(MFDTheme.primaryAccent)
+                    Text(location.title)
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(MFDTheme.breadcrumbPillBackground)
+                )
+            }
+
+            HStack(spacing: 4) {
+                Image(systemName: "line.3.horizontal.decrease")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+
+                TextField("Filter by file name", text: $viewModel.filterText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11))
+                    .focused($isFilterFocused)
+                    .onSubmit {
+                        isFilterFocused = false
+                    }
+                    .onKeyPress(.escape) {
+                        viewModel.clearFilter()
+                        isFilterFocused = false
+                        return .handled
+                    }
+
+                if viewModel.isFiltering {
+                    Button {
+                        viewModel.clearFilter()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear Filter")
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5)
+                            .stroke(MFDTheme.primaryAccent.opacity(0.5), lineWidth: 1)
+                    )
+            )
+
+            Spacer(minLength: 4)
+
+            viewModePicker
+
+            controls(canEdit: false)
+        }
+        .padding(.horizontal, 6)
+    }
+
+    // MARK: - Special Location Header
 
     private var specialLocationHeader: some View {
         HStack(spacing: 6) {
             Image(systemName: specialLocationIcon)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(MFDTheme.primaryAccent)
+                .font(.system(size: 11))
             Text(location.title)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 11, weight: .medium))
                 .lineLimit(1)
-            Spacer()
+                .foregroundStyle(isFocused ? .primary : .secondary)
+
+            Spacer(minLength: 4)
+
+            filterToggleButton
+
+            viewModePicker
+
             controls(canEdit: false)
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 7)
+    }
+
+    // MARK: - Subcomponents
+
+    private var filterToggleButton: some View {
+        Button {
+            onFocus()
+            isFilterFocused = true
+        } label: {
+            Image(systemName: viewModel.isFiltering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(viewModel.isFiltering ? MFDTheme.primaryAccent : .secondary)
+                .frame(width: 20, height: 20)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(viewModel.isFiltering ? MFDTheme.primaryAccent.opacity(0.12) : MFDTheme.breadcrumbPillBackground)
+                )
+        }
+        .buttonStyle(.plain)
+        .help("Filter files (/)")
+    }
+
+    private var viewModePicker: some View {
+        Picker("View", selection: $viewModel.viewMode) {
+            ForEach(BrowserViewMode.allCases, id: \.self) { mode in
+                Image(systemName: mode.systemImage)
+                    .accessibilityLabel(mode.localizedName)
+                    .tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .controlSize(.small)
+        .labelsHidden()
+        .fixedSize()
+        .help("View Mode")
     }
 
     private func controls(canEdit: Bool) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 4) {
             Button(action: onRefresh) {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 10))
+                    .frame(width: 18, height: 18)
             }
             .buttonStyle(.plain)
             .help("Refresh")
@@ -122,6 +266,7 @@ struct PathBarView: View {
                 Button(action: startEditing) {
                     Image(systemName: "pencil")
                         .font(.system(size: 10))
+                        .frame(width: 18, height: 18)
                 }
                 .buttonStyle(.plain)
                 .help("Edit Path")
@@ -129,8 +274,8 @@ struct PathBarView: View {
 
             if canRemovePane {
                 Button(action: onRemovePane) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 11))
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
                         .frame(width: 18, height: 18)
                         .contentShape(Rectangle())
                 }
@@ -139,7 +284,6 @@ struct PathBarView: View {
                 .help("Remove Pane")
             }
         }
-        .padding(.trailing, 6)
         .foregroundStyle(.secondary)
     }
 
@@ -147,10 +291,11 @@ struct PathBarView: View {
         HStack(spacing: 6) {
             Image(systemName: "folder")
                 .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(MFDTheme.primaryAccent)
+
             TextField("Path", text: $pathText)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12, design: .monospaced))
+                .font(.system(size: 11, design: .monospaced))
                 .focused($isPathFieldFocused)
                 .onSubmit(commitPath)
                 .onKeyPress("a", phases: .down) { keyPress in
@@ -160,20 +305,22 @@ struct PathBarView: View {
                     }
                     return .handled
                 }
+
             Button(action: commitPath) {
                 Image(systemName: "arrow.right.circle.fill")
+                    .foregroundStyle(MFDTheme.primaryAccent)
             }
             .buttonStyle(.plain)
             .help("Open Path")
+
             Button(action: { isEditing = false }) {
                 Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
             .help("Cancel Editing")
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 5)
         .onExitCommand { isEditing = false }
     }
 
@@ -188,9 +335,10 @@ struct PathBarView: View {
 
     private func breadcrumbBackground(for url: URL, at index: Int) -> Color {
         if dropTargetURL == url {
-            return Color.accentColor.opacity(0.3)
+            return MFDTheme.primaryAccent.opacity(0.3)
         }
-        return index == pathComponents.count - 1 ? Color.accentColor.opacity(0.15) : .clear
+        let isLast = index == pathComponents.count - 1
+        return isLast ? MFDTheme.primaryAccent.opacity(0.12) : Color.clear
     }
 
     private func startEditing() {

@@ -41,7 +41,7 @@ struct AIInputBar: View {
             Divider()
             composer
         }
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .background(MFDTheme.paneHeaderBackground)
         .onAppear { isFieldFocused = true }
         .onExitCommand { viewModel.toggleAIAssistant() }
     }
@@ -49,7 +49,7 @@ struct AIInputBar: View {
     private var header: some View {
         HStack(spacing: 6) {
             Image(systemName: "sparkles")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(MFDTheme.aiSparkleColor)
             Text(viewModel.currentURL?.lastPathComponent ?? L10n.string("Current Folder"))
                 .font(.system(size: 11, weight: .medium))
                 .lineLimit(1)
@@ -132,7 +132,7 @@ struct AIInputBar: View {
 
             HStack(alignment: .top, spacing: 6) {
                 Image(systemName: "sparkles")
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(MFDTheme.aiSparkleColor)
                 markdownText(exchange.answer)
             }
             .font(.system(size: 12))

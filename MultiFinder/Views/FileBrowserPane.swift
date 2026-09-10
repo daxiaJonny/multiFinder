@@ -26,17 +26,27 @@ struct FileBrowserPane: View {
             .id(pane.selectedTab.id)
         }
         .frame(minWidth: 170, minHeight: 130)
+        .overlay(alignment: .top) {
+            if isFocused {
+                Rectangle()
+                    .fill(MFDTheme.activeIndicator)
+                    .frame(height: 2.5)
+                    .shadow(color: MFDTheme.activeIndicator.opacity(0.6), radius: 3, y: 1)
+                    .transition(.opacity)
+            }
+        }
         .overlay(
             RoundedRectangle(cornerRadius: 0)
                 .stroke(
-                    paneBorderColor,
-                    lineWidth: paneBorderWidth
+                    isHighlighted ? MFDTheme.primaryAccent : MFDTheme.subtleHairline,
+                    lineWidth: isHighlighted ? 2.5 : 0.5
                 )
                 .shadow(
-                    color: isHighlighted ? Color.accentColor.opacity(0.7) : .clear,
-                    radius: isHighlighted ? 7 : 0
+                    color: isHighlighted ? MFDTheme.primaryAccent.opacity(0.6) : .clear,
+                    radius: isHighlighted ? 6 : 0
                 )
         )
+        .animation(.easeInOut(duration: 0.2), value: isFocused)
         .animation(.easeInOut(duration: 0.2), value: isHighlighted)
         .contextMenu {
             paneContextMenu
@@ -90,16 +100,6 @@ struct FileBrowserPane: View {
         .disabled(layoutManager.totalPaneCount <= 1)
     }
 
-    // MARK: - Helpers
-
-    private var paneBorderColor: Color {
-        if isHighlighted { return .accentColor }
-        return isFocused ? Color.accentColor.opacity(0.4) : Color(nsColor: .separatorColor)
-    }
-
-    private var paneBorderWidth: Double {
-        isHighlighted ? 3 : (isFocused ? 1.5 : 0.5)
-    }
 }
 
 private struct PaneTabBar: View {
@@ -110,7 +110,7 @@ private struct PaneTabBar: View {
     var body: some View {
         HStack(spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 1) {
+                HStack(spacing: 2) {
                     ForEach(Array(pane.tabs.enumerated()), id: \.element.id) { index, tab in
                         PaneTabItem(
                             tab: tab,
@@ -125,7 +125,8 @@ private struct PaneTabBar: View {
                         )
                     }
                 }
-                .padding(.horizontal, 4)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
             }
 
             Button {
@@ -135,14 +136,18 @@ private struct PaneTabBar: View {
                 Image(systemName: "plus")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundColor(.secondary)
-                    .frame(width: 22, height: 22)
-                    .contentShape(Rectangle())
+                    .frame(width: 20, height: 20)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(MFDTheme.breadcrumbPillBackground)
+                    )
             }
             .buttonStyle(.plain)
+            .padding(.trailing, 6)
             .help("New Tab")
         }
-        .frame(height: 24)
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .frame(height: 26)
+        .background(MFDTheme.paneTabBarBackground)
     }
 }
 
@@ -155,9 +160,13 @@ private struct PaneTabItem: View {
     @State private var isHovering = false
 
     var body: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: 4) {
+            Image(systemName: "folder")
+                .font(.system(size: 9))
+                .foregroundColor(isSelected ? MFDTheme.primaryAccent : .secondary)
+
             Text(tab.title)
-                .font(.system(size: 11))
+                .font(.system(size: 11, weight: isSelected ? .medium : .regular))
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .foregroundColor(isSelected ? .primary : .secondary)
@@ -166,15 +175,21 @@ private struct PaneTabItem: View {
                 Image(systemName: "xmark")
                     .font(.system(size: 7, weight: .bold))
                     .foregroundColor(.secondary)
+                    .frame(width: 14, height: 14)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .opacity(isHovering || isSelected ? 1 : 0)
             .help("Close Tab")
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.vertical, 3)
         .frame(maxWidth: 160)
-        .background(isSelected ? Color(nsColor: .controlBackgroundColor) : .clear)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(isSelected ? MFDTheme.activeTabBackground : (isHovering ? MFDTheme.hoverPillBackground : Color.clear))
+                .shadow(color: isSelected ? Color.black.opacity(0.06) : Color.clear, radius: 2, y: 1)
+        )
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
         .onHover { isHovering = $0 }
@@ -209,8 +224,11 @@ private struct PaneTabContent: View {
             }
 
             PathBarView(
+                viewModel: viewModel,
                 location: viewModel.location,
                 isFocused: isFocused,
+                isFilterFocused: $isFilterFieldFocused,
+                onFocus: onFocus,
                 onNavigate: { url in
                     onFocus()
                     viewModel.navigate(to: url)
@@ -233,10 +251,6 @@ private struct PaneTabContent: View {
                     viewModel.transferDroppedItems(urls, into: destination, operation: operation)
                 }
             )
-
-            Divider()
-
-            filterBar
 
             Divider()
 
@@ -353,56 +367,6 @@ private struct PaneTabContent: View {
         }
     }
 
-    private var filterBar: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "line.3.horizontal.decrease")
-                .foregroundStyle(.secondary)
-
-            TextField("Filter by file name", text: $viewModel.filterText)
-                .textFieldStyle(.plain)
-                .focused($isFilterFieldFocused)
-                .onSubmit {
-                    isFilterFieldFocused = false
-                }
-                .onKeyPress(.escape) {
-                    viewModel.clearFilter()
-                    isFilterFieldFocused = false
-                    return .handled
-                }
-
-            if viewModel.isFiltering {
-                Button {
-                    viewModel.clearFilter()
-                    isFilterFieldFocused = true
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Clear Filter")
-            }
-
-            Picker("View", selection: $viewModel.viewMode) {
-                ForEach(BrowserViewMode.allCases, id: \.self) { mode in
-                    Image(systemName: mode.systemImage)
-                        .accessibilityLabel(mode.localizedName)
-                        .tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-            .help("View Mode")
-        }
-        .font(.system(size: 11))
-        .padding(.horizontal, 9)
-        .frame(height: 27)
-        .background(Color(nsColor: .underPageBackgroundColor))
-        .onChange(of: isFilterFieldFocused) { _, focused in
-            if focused { onFocus() }
-        }
-    }
-
     private var statusBar: some View {
         HStack {
             Text(itemCountText)
@@ -431,8 +395,8 @@ private struct PaneTabContent: View {
         .contentShape(Rectangle())
         .background(
             isCurrentDirectoryDropTargeted
-                ? Color.accentColor.opacity(0.18)
-                : Color(nsColor: .underPageBackgroundColor)
+                ? MFDTheme.primaryAccent.opacity(0.18)
+                : MFDTheme.paneHeaderBackground.opacity(0.5)
         )
         .onDrop(
             of: [UTType.fileURL],
