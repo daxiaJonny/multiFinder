@@ -45,7 +45,9 @@ struct SidebarView: View {
 
     @ObservedObject private var favoritesStore: FavoritesStore
     @ObservedObject private var volumeStore: VolumeStore
+    @ObservedObject private var preferences = SidebarPreferences.shared
     @State private var selectedDestination: SidebarDestination?
+    @State private var editingTarget: SidebarAppearanceEditorTarget?
 
     init(
         currentLocation: BrowserLocation,
@@ -133,6 +135,9 @@ struct SidebarView: View {
                 onNavigate(url)
             }
         }
+        .sheet(item: $editingTarget) { target in
+            SidebarAppearanceEditorSheet(target: target)
+        }
     }
 
     private var standardPlaces: [SidebarItem] {
@@ -210,7 +215,7 @@ struct SidebarView: View {
             .textCase(.uppercase)
     }
 
-    private func iconColor(for item: SidebarItem) -> Color {
+    private func defaultIconColor(for item: SidebarItem) -> Color {
         if item.isRecents { return MFDTheme.secondaryAccent }
         switch item.id {
         case "home": return .blue
@@ -226,11 +231,72 @@ struct SidebarView: View {
         }
     }
 
+    private func iconColor(for item: SidebarItem) -> Color {
+        if let customColor = preferences.customColors[item.id],
+           let color = SidebarColorOption.color(for: customColor) {
+            return color
+        }
+        return defaultIconColor(for: item)
+    }
+
+    private func iconName(for item: SidebarItem) -> String {
+        preferences.customIcons[item.id] ?? item.icon
+    }
+
     private func favoriteRow(_ favorite: FileFavorite) -> some View {
-        SidebarLabel(icon: "star.fill", name: favorite.name, iconColor: .yellow)
+        let icon = favorite.customIcon ?? "star.fill"
+        let color = SidebarColorOption.color(for: favorite.customColor) ?? .yellow
+
+        return SidebarLabel(icon: icon, name: favorite.name, iconColor: color)
             .tag(SidebarDestination.directory(favorite.url))
             .help(favorite.url.path)
             .contextMenu {
+                Menu("设置颜色") {
+                    ForEach(SidebarColorOption.all) { option in
+                        Button {
+                            favoritesStore.updateColor(id: favorite.id, color: option.id)
+                        } label: {
+                            Text(favorite.customColor == option.id ? "✓ \(option.emoji) \(option.name)" : "   \(option.emoji) \(option.name)")
+                        }
+                    }
+                    Divider()
+                    Button("默认颜色 (金黄)") {
+                        favoritesStore.updateColor(id: favorite.id, color: nil)
+                    }
+                }
+
+                Menu("设置图标") {
+                    ForEach(SidebarIconOption.all) { option in
+                        Button {
+                            favoritesStore.updateIcon(id: favorite.id, icon: option.systemName)
+                        } label: {
+                            Label(option.name, systemImage: option.systemName)
+                        }
+                    }
+                    Divider()
+                    Button("默认图标 (星标)") {
+                        favoritesStore.updateIcon(id: favorite.id, icon: nil)
+                    }
+                }
+
+                Button("自定义外观…") {
+                    editingTarget = SidebarAppearanceEditorTarget(
+                        id: favorite.id.uuidString,
+                        name: favorite.name,
+                        currentIcon: icon,
+                        currentColor: color,
+                        currentColorValue: favorite.customColor,
+                        onSave: { newIcon, newColor in
+                            favoritesStore.updateAppearance(id: favorite.id, icon: newIcon, color: newColor)
+                        },
+                        onReset: {
+                            favoritesStore.updateAppearance(id: favorite.id, icon: nil, color: nil)
+                        }
+                    )
+                }
+
+                Divider()
+
                 Button(L10n.string("Remove from Favorites"), role: .destructive) {
                     favoritesStore.remove(id: favorite.id)
                 }
@@ -238,9 +304,64 @@ struct SidebarView: View {
     }
 
     private func sidebarRow(_ item: SidebarItem) -> some View {
-        SidebarLabel(icon: item.icon, name: item.name, iconColor: iconColor(for: item))
+        let icon = iconName(for: item)
+        let color = iconColor(for: item)
+
+        return SidebarLabel(icon: icon, name: item.name, iconColor: color)
             .tag(item.destination)
             .help(item.url?.path ?? item.name)
+            .contextMenu {
+                Menu("设置颜色") {
+                    ForEach(SidebarColorOption.all) { option in
+                        Button {
+                            preferences.setColor(option.id, for: item.id)
+                        } label: {
+                            Text(preferences.customColors[item.id] == option.id ? "✓ \(option.emoji) \(option.name)" : "   \(option.emoji) \(option.name)")
+                        }
+                    }
+                    Divider()
+                    Button("还原为默认颜色") {
+                        preferences.setColor(nil, for: item.id)
+                    }
+                }
+
+                Menu("设置图标") {
+                    ForEach(SidebarIconOption.all) { option in
+                        Button {
+                            preferences.setIcon(option.systemName, for: item.id)
+                        } label: {
+                            Label(option.name, systemImage: option.systemName)
+                        }
+                    }
+                    Divider()
+                    Button("还原为默认图标") {
+                        preferences.setIcon(nil, for: item.id)
+                    }
+                }
+
+                Button("自定义外观…") {
+                    editingTarget = SidebarAppearanceEditorTarget(
+                        id: item.id,
+                        name: item.name,
+                        currentIcon: icon,
+                        currentColor: color,
+                        currentColorValue: preferences.customColors[item.id],
+                        onSave: { newIcon, newColor in
+                            preferences.setIcon(newIcon, for: item.id)
+                            preferences.setColor(newColor, for: item.id)
+                        },
+                        onReset: {
+                            preferences.reset(for: item.id)
+                        }
+                    )
+                }
+
+                Divider()
+
+                Button("还原为默认外观") {
+                    preferences.reset(for: item.id)
+                }
+            }
     }
 
     private func volumeRow(_ volume: VolumeStore.MountedVolume, showCapacity: Bool) -> some View {
@@ -372,5 +493,327 @@ private struct SidebarLabel: View {
             Spacer(minLength: 0)
         }
         .frame(minHeight: 24)
+    }
+}
+
+// MARK: - Sidebar Color & Icon Models
+
+struct SidebarColorOption: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let emoji: String
+    let hex: String
+    let color: Color
+
+    static let all: [SidebarColorOption] = [
+        SidebarColorOption(id: "yellow", name: "金黄", emoji: "🟡", hex: "#EAB308", color: .yellow),
+        SidebarColorOption(id: "orange", name: "橙色", emoji: "🟠", hex: "#F97316", color: .orange),
+        SidebarColorOption(id: "red", name: "红色", emoji: "🔴", hex: "#EF4444", color: .red),
+        SidebarColorOption(id: "pink", name: "粉红", emoji: "🌸", hex: "#EC4899", color: .pink),
+        SidebarColorOption(id: "purple", name: "紫色", emoji: "🟣", hex: "#8B5CF6", color: .purple),
+        SidebarColorOption(id: "blue", name: "经典蓝", emoji: "🔵", hex: "#3B82F6", color: .blue),
+        SidebarColorOption(id: "cyan", name: "天青", emoji: "🩵", hex: "#06B6D4", color: .cyan),
+        SidebarColorOption(id: "mint", name: "薄荷绿", emoji: "🟢", hex: "#10B981", color: .mint),
+        SidebarColorOption(id: "brown", name: "暖棕", emoji: "🟤", hex: "#B45309", color: .brown),
+        SidebarColorOption(id: "gray", name: "石板灰", emoji: "⚪️", hex: "#94A3B8", color: .gray),
+    ]
+
+    static func color(for keyOrHex: String?) -> Color? {
+        guard let value = keyOrHex?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        if let option = all.first(where: { $0.id == value }) {
+            return option.color
+        }
+        if value.hasPrefix("#") {
+            return parseHex(value)
+        }
+        return nil
+    }
+
+    private static func parseHex(_ hex: String) -> Color? {
+        var hexSanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if hexSanitized.hasPrefix("#") {
+            hexSanitized.removeFirst()
+        }
+        guard hexSanitized.count == 6 || hexSanitized.count == 8 else { return nil }
+        var rgbValue: UInt64 = 0
+        guard Scanner(string: hexSanitized).scanHexInt64(&rgbValue) else { return nil }
+
+        let r, g, b, a: Double
+        if hexSanitized.count == 6 {
+            r = Double((rgbValue & 0xFF0000) >> 16) / 255.0
+            g = Double((rgbValue & 0x00FF00) >> 8) / 255.0
+            b = Double(rgbValue & 0x0000FF) / 255.0
+            a = 1.0
+        } else {
+            r = Double((rgbValue & 0xFF000000) >> 24) / 255.0
+            g = Double((rgbValue & 0x00FF0000) >> 16) / 255.0
+            b = Double((rgbValue & 0x0000FF00) >> 8) / 255.0
+            a = Double(rgbValue & 0x000000FF) / 255.0
+        }
+        return Color(red: r, green: g, blue: b, opacity: a)
+    }
+}
+
+struct SidebarIconOption: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let systemName: String
+
+    static let all: [SidebarIconOption] = [
+        SidebarIconOption(id: "star", name: "星标", systemName: "star.fill"),
+        SidebarIconOption(id: "folder", name: "文件夹", systemName: "folder.fill"),
+        SidebarIconOption(id: "code", name: "代码工程", systemName: "chevron.left.forwardslash.chevron.right"),
+        SidebarIconOption(id: "terminal", name: "终端", systemName: "terminal.fill"),
+        SidebarIconOption(id: "rocket", name: "火箭项目", systemName: "rocket.fill"),
+        SidebarIconOption(id: "box", name: "仓库依赖", systemName: "shippingbox.fill"),
+        SidebarIconOption(id: "tag", name: "标签分类", systemName: "tag.fill"),
+        SidebarIconOption(id: "bookmark", name: "书签", systemName: "bookmark.fill"),
+        SidebarIconOption(id: "lightbulb", name: "创意想法", systemName: "lightbulb.fill"),
+        SidebarIconOption(id: "bolt", name: "核心快速", systemName: "bolt.fill"),
+        SidebarIconOption(id: "target", name: "目标成就", systemName: "target"),
+        SidebarIconOption(id: "note", name: "笔记周报", systemName: "note.text"),
+        SidebarIconOption(id: "palette", name: "设计素材", systemName: "paintpalette.fill"),
+        SidebarIconOption(id: "heart", name: "特别喜爱", systemName: "heart.fill"),
+        SidebarIconOption(id: "coffee", name: "日常休闲", systemName: "cup.and.saucer.fill"),
+        SidebarIconOption(id: "flame", name: "紧急热门", systemName: "flame.fill"),
+        SidebarIconOption(id: "wrench", name: "工具配置", systemName: "wrench.and.screwdriver.fill"),
+        SidebarIconOption(id: "globe", name: "网络网站", systemName: "globe"),
+    ]
+}
+
+// MARK: - Sidebar Preferences Store
+
+@MainActor
+final class SidebarPreferences: ObservableObject {
+    static let shared = SidebarPreferences()
+    private let userDefaults: UserDefaults
+    private let colorsKey = "com.multifinder.sidebar.customColors"
+    private let iconsKey = "com.multifinder.sidebar.customIcons"
+
+    @Published private(set) var customColors: [String: String]
+    @Published private(set) var customIcons: [String: String]
+
+    init(userDefaults: UserDefaults = .standard) {
+        self.userDefaults = userDefaults
+        self.customColors = userDefaults.dictionary(forKey: colorsKey) as? [String: String] ?? [:]
+        self.customIcons = userDefaults.dictionary(forKey: iconsKey) as? [String: String] ?? [:]
+    }
+
+    func setColor(_ color: String?, for itemId: String) {
+        if let color, !color.isEmpty {
+            customColors[itemId] = color
+        } else {
+            customColors.removeValue(forKey: itemId)
+        }
+        userDefaults.set(customColors, forKey: colorsKey)
+    }
+
+    func setIcon(_ icon: String?, for itemId: String) {
+        if let icon, !icon.isEmpty {
+            customIcons[itemId] = icon
+        } else {
+            customIcons.removeValue(forKey: itemId)
+        }
+        userDefaults.set(customIcons, forKey: iconsKey)
+    }
+
+    func reset(for itemId: String) {
+        customColors.removeValue(forKey: itemId)
+        customIcons.removeValue(forKey: itemId)
+        userDefaults.set(customColors, forKey: colorsKey)
+        userDefaults.set(customIcons, forKey: iconsKey)
+    }
+}
+
+// MARK: - Sidebar Appearance Editor Sheet
+
+struct SidebarAppearanceEditorTarget: Identifiable {
+    let id: String
+    let name: String
+    let currentIcon: String
+    let currentColor: Color
+    let currentColorValue: String?
+    let onSave: (String?, String?) -> Void
+    let onReset: () -> Void
+}
+
+struct SidebarAppearanceEditorSheet: View {
+    let target: SidebarAppearanceEditorTarget
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var selectedIcon: String
+    @State private var selectedColorKey: String?
+    @State private var customColor: Color
+    @State private var customSFText: String = ""
+
+    init(target: SidebarAppearanceEditorTarget) {
+        self.target = target
+        _selectedIcon = State(initialValue: target.currentIcon)
+        _selectedColorKey = State(initialValue: target.currentColorValue)
+        _customColor = State(initialValue: target.currentColor)
+    }
+
+    private var activeColor: Color {
+        if let key = selectedColorKey, let c = SidebarColorOption.color(for: key) {
+            return c
+        }
+        return customColor
+    }
+
+    var body: some View {
+        VStack(spacing: 16) {
+            // Header
+            HStack {
+                Text("自定义外观")
+                    .font(.headline)
+                Spacer()
+                Button("完成") {
+                    let finalColor = selectedColorKey ?? customColorHex
+                    target.onSave(selectedIcon, finalColor)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+
+            // Preview Box
+            HStack(spacing: 12) {
+                Image(systemName: selectedIcon)
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(activeColor)
+                    .font(.system(size: 22, weight: .semibold))
+                    .frame(width: 32, height: 32)
+                Text(target.name)
+                    .font(.system(size: 15, weight: .medium))
+                Spacer()
+            }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(MFDTheme.subtleHairline, lineWidth: 1))
+
+            Divider()
+
+            // Color Selector
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("选择颜色")
+                        .font(.subheadline).bold()
+                    Spacer()
+                    ColorPicker("自定义", selection: $customColor, supportsOpacity: false)
+                        .labelsHidden()
+                        .onChange(of: customColor) { _, _ in
+                            selectedColorKey = nil
+                        }
+                }
+
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 5), spacing: 8) {
+                    ForEach(SidebarColorOption.all) { option in
+                        Button {
+                            selectedColorKey = option.id
+                            customColor = option.color
+                        } label: {
+                            HStack(spacing: 4) {
+                                Circle()
+                                    .fill(option.color)
+                                    .frame(width: 14, height: 14)
+                                Text(option.name)
+                                    .font(.system(size: 11))
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 4)
+                            .frame(maxWidth: .infinity)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(selectedColorKey == option.id ? option.color.opacity(0.18) : Color.clear)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(selectedColorKey == option.id ? option.color : Color.clear, lineWidth: 1.2)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            Divider()
+
+            // Icon Selector
+            VStack(alignment: .leading, spacing: 8) {
+                Text("选择图标")
+                    .font(.subheadline).bold()
+
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 6), spacing: 8) {
+                    ForEach(SidebarIconOption.all) { option in
+                        Button {
+                            selectedIcon = option.systemName
+                        } label: {
+                            VStack(spacing: 4) {
+                                Image(systemName: option.systemName)
+                                    .font(.system(size: 16))
+                                    .foregroundStyle(selectedIcon == option.systemName ? activeColor : .primary)
+                                    .frame(height: 20)
+                                Text(option.name)
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 46)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(selectedIcon == option.systemName ? activeColor.opacity(0.12) : Color.clear)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(selectedIcon == option.systemName ? activeColor : Color.clear, lineWidth: 1.2)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    TextField("SF Symbol 名称 (如 swift, cpu, flame)", text: $customSFText)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11))
+                    Button("应用") {
+                        let trimmed = customSFText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty {
+                            selectedIcon = trimmed
+                        }
+                    }
+                    .disabled(customSFText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                .padding(.top, 4)
+            }
+
+            Divider()
+
+            // Footer
+            HStack {
+                Button("还原默认") {
+                    target.onReset()
+                    dismiss()
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                Spacer()
+                Button("取消") {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(18)
+        .frame(width: 380)
+    }
+
+    private var customColorHex: String {
+        let nsColor = NSColor(customColor).usingColorSpace(.sRGB) ?? NSColor.systemBlue
+        let r = Int(round(max(0, min(1, nsColor.redComponent)) * 255.0))
+        let g = Int(round(max(0, min(1, nsColor.greenComponent)) * 255.0))
+        let b = Int(round(max(0, min(1, nsColor.blueComponent)) * 255.0))
+        return String(format: "#%02X%02X%02X", r, g, b)
     }
 }

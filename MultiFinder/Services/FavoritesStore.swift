@@ -4,10 +4,19 @@ import Foundation
 struct FileFavorite: Identifiable, Codable, Hashable, Sendable {
     let id: UUID
     let url: URL
+    var customIcon: String?
+    var customColor: String?
 
-    init(id: UUID = UUID(), url: URL) {
+    init(
+        id: UUID = UUID(),
+        url: URL,
+        customIcon: String? = nil,
+        customColor: String? = nil
+    ) {
         self.id = id
         self.url = url.standardizedFileURL
+        self.customIcon = customIcon
+        self.customColor = customColor
     }
 
     var name: String {
@@ -15,13 +24,15 @@ struct FileFavorite: Identifiable, Codable, Hashable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, url
+        case id, url, customIcon, customColor
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         url = try container.decode(URL.self, forKey: .url).standardizedFileURL
+        customIcon = try container.decodeIfPresent(String.self, forKey: .customIcon)
+        customColor = try container.decodeIfPresent(String.self, forKey: .customColor)
     }
 }
 
@@ -106,6 +117,33 @@ final class FavoritesStore: ObservableObject {
         return add(url) != nil
     }
 
+    @discardableResult
+    func updateAppearance(id: FileFavorite.ID, icon: String?, color: String?) -> Bool {
+        guard let index = favorites.firstIndex(where: { $0.id == id }) else { return false }
+        var favorite = favorites[index]
+        favorite.customIcon = icon
+        favorite.customColor = color
+        favorites[index] = favorite
+        persist()
+        return true
+    }
+
+    @discardableResult
+    func updateColor(id: FileFavorite.ID, color: String?) -> Bool {
+        guard let index = favorites.firstIndex(where: { $0.id == id }) else { return false }
+        favorites[index].customColor = color
+        persist()
+        return true
+    }
+
+    @discardableResult
+    func updateIcon(id: FileFavorite.ID, icon: String?) -> Bool {
+        guard let index = favorites.firstIndex(where: { $0.id == id }) else { return false }
+        favorites[index].customIcon = icon
+        persist()
+        return true
+    }
+
     func move(fromOffsets source: IndexSet, toOffset destination: Int) {
         let validSource = source.filter { favorites.indices.contains($0) }
         guard !validSource.isEmpty, (0...favorites.count).contains(destination) else { return }
@@ -140,7 +178,12 @@ final class FavoritesStore: ObservableObject {
             guard let url = normalizedDirectoryURL(favorite.url), seenURLs.insert(url).inserted else {
                 return nil
             }
-            return FileFavorite(id: favorite.id, url: url)
+            return FileFavorite(
+                id: favorite.id,
+                url: url,
+                customIcon: favorite.customIcon,
+                customColor: favorite.customColor
+            )
         }
     }
 }

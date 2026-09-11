@@ -37,20 +37,14 @@ struct FileBrowserPane: View {
                     lineWidth: isHighlighted ? 2.5 : (isFocused ? 1.5 : 0.8)
                 )
         )
-        .overlay(alignment: .top) {
-            if isFocused {
-                Capsule()
-                    .fill(MFDTheme.primaryAccent)
-                    .frame(width: 56, height: 3)
-                    .shadow(color: MFDTheme.primaryAccent.opacity(0.8), radius: 4, y: 1)
-                    .padding(.top, 2)
-                    .transition(.opacity)
-            }
+        .overlay {
+            PaneFocusMonitor(onFocus: onFocus)
+                .allowsHitTesting(false)
         }
         .shadow(color: Color.black.opacity(isFocused ? 0.16 : 0.05), radius: isFocused ? 6 : 2, y: 1)
         .opacity(isFocused ? 1.0 : 0.88)
-        .animation(.easeInOut(duration: 0.18), value: isFocused)
-        .animation(.easeInOut(duration: 0.18), value: isHighlighted)
+        .animation(.easeOut(duration: 0.12), value: isFocused)
+        .animation(.easeOut(duration: 0.12), value: isHighlighted)
         .contextMenu {
             paneContextMenu
         }
@@ -565,5 +559,68 @@ private struct CurrentDirectoryDropDelegate: DropDelegate {
 
     private var currentOperation: FileDropOperation {
         FileDropModifierKeys.currentOperation
+    }
+}
+
+// MARK: - Pane Focus Monitor (Instant 0ms focus switching on mouse down)
+
+private struct PaneFocusMonitor: NSViewRepresentable {
+    let onFocus: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onFocus: onFocus)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        context.coordinator.attach(to: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.onFocus = onFocus
+        context.coordinator.attach(to: nsView)
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.detach()
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var onFocus: () -> Void
+        private weak var view: NSView?
+        private var monitor: Any?
+
+        init(onFocus: @escaping () -> Void) {
+            self.onFocus = onFocus
+        }
+
+        func attach(to view: NSView) {
+            self.view = view
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+                guard let self = self,
+                      let view = self.view,
+                      let window = view.window,
+                      event.window === window else {
+                    return event
+                }
+                let locationInWindow = event.locationInWindow
+                let viewFrameInWindow = view.convert(view.bounds, to: nil)
+                if viewFrameInWindow.contains(locationInWindow) {
+                    self.onFocus()
+                }
+                return event
+            }
+        }
+
+        func detach() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+            view = nil
+        }
     }
 }

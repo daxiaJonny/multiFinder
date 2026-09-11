@@ -107,6 +107,48 @@ final class FavoritesStoreTests: XCTestCase {
         XCTAssertEqual(makeStore(userDefaults: userDefaults).favorites, store.favorites)
     }
 
+    func testCustomAppearanceUpdatesAndPersists() throws {
+        let (userDefaults, suiteName) = try makeUserDefaults()
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+        let store = makeStore(userDefaults: userDefaults)
+        let url = URL(fileURLWithPath: "/tmp/CustomFav")
+        let fav = try XCTUnwrap(store.add(url))
+
+        XCTAssertNil(fav.customIcon)
+        XCTAssertNil(fav.customColor)
+
+        XCTAssertTrue(store.updateIcon(id: fav.id, icon: "rocket.fill"))
+        XCTAssertEqual(store.favorite(for: url)?.customIcon, "rocket.fill")
+
+        XCTAssertTrue(store.updateColor(id: fav.id, color: "red"))
+        XCTAssertEqual(store.favorite(for: url)?.customColor, "red")
+
+        XCTAssertTrue(store.updateAppearance(id: fav.id, icon: "terminal.fill", color: "blue"))
+        let restoredStore = makeStore(userDefaults: userDefaults)
+        let restoredFav = try XCTUnwrap(restoredStore.favorite(for: url))
+        XCTAssertEqual(restoredFav.customIcon, "terminal.fill")
+        XCTAssertEqual(restoredFav.customColor, "blue")
+    }
+
+    func testLegacyDecodingWithoutCustomAppearance() throws {
+        let (userDefaults, suiteName) = try makeUserDefaults()
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+        let id = UUID()
+        let legacyJSON = """
+        [
+            {"id": "\(id.uuidString)", "url": "file:///tmp/LegacyFav"}
+        ]
+        """
+        userDefaults.set(Data(legacyJSON.utf8), forKey: Self.storageKey)
+
+        let store = makeStore(userDefaults: userDefaults)
+        XCTAssertEqual(store.favorites.count, 1)
+        let fav = try XCTUnwrap(store.favorites.first)
+        XCTAssertEqual(fav.id, id)
+        XCTAssertNil(fav.customIcon)
+        XCTAssertNil(fav.customColor)
+    }
+
     private func makeUserDefaults() throws -> (UserDefaults, String) {
         let suiteName = "FavoritesStoreTests.\(UUID().uuidString)"
         return (try XCTUnwrap(UserDefaults(suiteName: suiteName)), suiteName)
