@@ -169,3 +169,61 @@ extension NSScroller {
     }
 }
 
+// MARK: - AppKit Table Row Separator Eliminator
+
+extension NSTableRowView {
+    private static var isSeparatorsDisabled = false
+
+    /// Permanently eliminates horizontal row separator lines in table views,
+    /// providing a clean, distraction-free Finder-style list view.
+    public static func disableRowSeparatorsGlobally() {
+        guard !isSeparatorsDisabled else { return }
+        isSeparatorsDisabled = true
+
+        if let sepClass = NSClassFromString("_NSTableRowSeparatorDrawingView") {
+            let drawSel = #selector(NSView.draw(_:))
+            let noopSel = #selector(NSTableRowView.mfd_noopDraw(_:))
+            if let noopMethod = class_getInstanceMethod(NSTableRowView.self, noopSel) {
+                class_replaceMethod(
+                    sepClass,
+                    drawSel,
+                    method_getImplementation(noopMethod),
+                    method_getTypeEncoding(noopMethod)
+                )
+            }
+        }
+
+        if let orig = class_getInstanceMethod(NSTableRowView.self, #selector(NSTableRowView.drawSeparator(in:))),
+           let noop = class_getInstanceMethod(NSTableRowView.self, #selector(NSTableRowView.mfd_noopDraw(_:))) {
+            method_setImplementation(orig, method_getImplementation(noop))
+        }
+
+        let sepColorSel = NSSelectorFromString("separatorColor")
+        let clearColorSel = #selector(NSTableRowView.mfd_clearSeparatorColor)
+        if let orig = class_getInstanceMethod(NSTableRowView.self, sepColorSel),
+           let clear = class_getInstanceMethod(NSTableRowView.self, clearColorSel) {
+            method_setImplementation(orig, method_getImplementation(clear))
+        }
+
+        let drawSepColorSel = NSSelectorFromString("_drawSeparatorInRect:withColor:")
+        let noopDrawSepSel = #selector(NSTableRowView.mfd_noopDrawSeparator(in:with:))
+        if let orig = class_getInstanceMethod(NSTableRowView.self, drawSepColorSel),
+           let noop = class_getInstanceMethod(NSTableRowView.self, noopDrawSepSel) {
+            method_setImplementation(orig, method_getImplementation(noop))
+        }
+    }
+
+    @objc private func mfd_noopDraw(_ dirtyRect: NSRect) {
+        // Suppress drawing to eliminate horizontal row separator lines!
+    }
+
+    @objc private func mfd_clearSeparatorColor() -> NSColor {
+        return .clear
+    }
+
+    @objc private func mfd_noopDrawSeparator(in rect: NSRect, with color: NSColor) {
+        // Suppress drawing with color!
+    }
+}
+
+

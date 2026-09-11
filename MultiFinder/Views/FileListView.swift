@@ -650,6 +650,7 @@ private struct FileTableClickMonitor: NSViewRepresentable {
                 tableView.usesAlternatingRowBackgroundColors = false
             }
             tableView.backgroundColor = .clear
+            tableView.gridStyleMask = []
             if let scrollView = tableView.enclosingScrollView {
                 scrollView.backgroundColor = .clear
                 scrollView.drawsBackground = false
@@ -668,6 +669,7 @@ private struct FileTableClickMonitor: NSViewRepresentable {
                     tableView.usesAlternatingRowBackgroundColors = false
                 }
                 tableView.backgroundColor = .clear
+                tableView.gridStyleMask = []
                 if let scrollView = tableView.enclosingScrollView {
                     scrollView.backgroundColor = .clear
                     scrollView.drawsBackground = false

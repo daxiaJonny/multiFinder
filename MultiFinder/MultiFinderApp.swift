@@ -39,6 +39,7 @@ struct MultiFinderApp: App {
 
     init() {
         NSTableView.disableZebraStripesGlobally()
+        NSTableRowView.disableRowSeparatorsGlobally()
         NSScroller.enforceOverlayGlobally()
     }
 
