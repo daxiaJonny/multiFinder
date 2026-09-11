@@ -45,10 +45,23 @@ struct PathBarView: View {
             }
         }
         .frame(height: 36)
-        .background(isFocused ? MFDTheme.paneHeaderBackground : MFDTheme.paneHeaderBackground.opacity(0.65))
+        .background(
+            ZStack {
+                if isFocused {
+                    MFDTheme.paneHeaderBackground
+                    LinearGradient(
+                        colors: [MFDTheme.primaryAccent.opacity(0.12), Color.clear],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                } else {
+                    MFDTheme.paneHeaderBackground.opacity(0.60)
+                }
+            }
+        )
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(MFDTheme.subtleHairline)
+                .fill(isFocused ? MFDTheme.primaryAccent.opacity(0.25) : MFDTheme.subtleHairline)
                 .frame(height: 0.5)
         }
     }

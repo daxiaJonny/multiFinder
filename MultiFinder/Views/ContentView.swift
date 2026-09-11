@@ -492,6 +492,28 @@ private struct BrowserToolbar: ToolbarContent {
             }
             .help("Search")
 
+            Button(action: layoutManager.toggleCommandPalette) {
+                HStack(spacing: 3) {
+                    Image(systemName: "command")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("K")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(
+                    Capsule()
+                        .fill(layoutManager.isCommandPalettePresented ? MFDTheme.primaryAccent.opacity(0.18) : Color.primary.opacity(0.06))
+                        .overlay(
+                            Capsule()
+                                .stroke(layoutManager.isCommandPalettePresented ? MFDTheme.primaryAccent.opacity(0.5) : MFDTheme.subtleHairline, lineWidth: 0.8)
+                        )
+                )
+                .foregroundStyle(layoutManager.isCommandPalettePresented ? MFDTheme.primaryAccent : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Command Palette (⌘K)")
+
             Button(action: pane.toggleAIAssistant) {
                 Image(systemName: "sparkles")
                     .accessibilityLabel("Ask About Current Folder")

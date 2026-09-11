@@ -107,15 +107,27 @@ public enum MFDTheme {
 
     /// Ambient glow tint for the active pane (native GPU composited, zero memory overhead).
     public static var activeAmbientGlow: Color {
-        primaryAccent.opacity(0.20)
+        primaryAccent.opacity(0.42)
+    }
+
+    /// Luminous dual-tone border for the active pane.
+    public static var activePaneBorderGradient: LinearGradient {
+        LinearGradient(
+            colors: [
+                primaryAccent,
+                secondaryAccent.opacity(0.85)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
     }
 
     /// Specular highlight bevel gradient for focused card containers.
     public static var specularHighlightGradient: LinearGradient {
         LinearGradient(
             colors: [
-                Color.white.opacity(0.16),
-                Color.white.opacity(0.04),
+                Color.white.opacity(0.24),
+                Color.white.opacity(0.06),
                 Color.clear
             ],
             startPoint: .top,

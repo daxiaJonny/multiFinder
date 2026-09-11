@@ -26,16 +26,24 @@ struct FileBrowserPane: View {
             .id(pane.selectedTab.id)
         }
         .frame(minWidth: 170, minHeight: 130)
-        .background(isFocused ? Color(nsColor: .controlBackgroundColor) : Color(nsColor: .windowBackgroundColor))
+        .background(isFocused ? Color(nsColor: .controlBackgroundColor) : Color(nsColor: .windowBackgroundColor).opacity(0.88))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(
                     isHighlighted
                         ? MFDTheme.primaryAccent
-                        : (isFocused ? MFDTheme.primaryAccent.opacity(0.55) : MFDTheme.subtleHairline),
-                    lineWidth: isHighlighted ? 2.0 : (isFocused ? 1.0 : 0.8)
+                        : (isFocused ? Color.clear : MFDTheme.subtleHairline),
+                    lineWidth: isHighlighted ? 2.0 : 0.8
                 )
+        )
+        .overlay(
+            Group {
+                if isFocused && !isHighlighted {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(MFDTheme.activePaneBorderGradient, lineWidth: 1.5)
+                }
+            }
         )
         .overlay(
             Group {
@@ -52,12 +60,12 @@ struct FileBrowserPane: View {
         }
         .shadow(
             color: isFocused ? MFDTheme.activeAmbientGlow : Color.clear,
-            radius: isFocused ? 10 : 0,
-            y: isFocused ? 2 : 0
+            radius: isFocused ? 14 : 0,
+            y: 0
         )
-        .shadow(color: Color.black.opacity(isFocused ? 0.18 : 0.05), radius: isFocused ? 5 : 2, y: 1)
-        .animation(.easeOut(duration: 0.12), value: isFocused)
-        .animation(.easeOut(duration: 0.12), value: isHighlighted)
+        .shadow(color: Color.black.opacity(isFocused ? 0.28 : 0.05), radius: isFocused ? 6 : 2, y: isFocused ? 2 : 1)
+        .animation(.easeOut(duration: 0.15), value: isFocused)
+        .animation(.easeOut(duration: 0.15), value: isHighlighted)
         .contextMenu {
             paneContextMenu
         }

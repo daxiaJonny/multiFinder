@@ -41,12 +41,14 @@ struct WorkspaceLayoutView: View {
 
         return VStack(spacing: 0) {
             ForEach(Array(layoutManager.rows.enumerated()), id: \.element.id) { rowIndex, row in
+                let isRowFocused = row.panes.contains { $0.id == layoutManager.focusedPaneID }
                 paneLayout(
                     row: row,
                     rowIndex: rowIndex,
                     width: contentWidth,
                     height: availableHeight * row.heightWeight / totalWeight
                 )
+                .zIndex(isRowFocused ? 10 : 1)
 
                 if rowIndex < layoutManager.rows.count - 1 {
                     SplitResizeHandle(axis: .horizontal) { delta in
@@ -71,10 +73,11 @@ struct WorkspaceLayoutView: View {
 
         return HStack(spacing: 0) {
             ForEach(Array(row.panes.enumerated()), id: \.element.id) { paneIndex, pane in
+                let isPaneFocused = layoutManager.focusedPaneID == pane.id
                 FileBrowserPane(
                     pane: pane,
                     layoutManager: layoutManager,
-                    isFocused: layoutManager.focusedPaneID == pane.id,
+                    isFocused: isPaneFocused,
                     isHighlighted: layoutManager.highlightedPaneID == pane.id,
                     onFocus: { layoutManager.focusedPaneID = pane.id }
                 )
@@ -83,6 +86,7 @@ struct WorkspaceLayoutView: View {
                     width: availableWidth * row.paneWeights[paneIndex] / totalWeight,
                     height: height
                 )
+                .zIndex(isPaneFocused ? 10 : 1)
 
                 if paneIndex < row.panes.count - 1 {
                     SplitResizeHandle(axis: .vertical) { delta in
