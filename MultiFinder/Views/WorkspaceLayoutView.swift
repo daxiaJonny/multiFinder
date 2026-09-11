@@ -78,6 +78,7 @@ struct WorkspaceLayoutView: View {
                     isHighlighted: layoutManager.highlightedPaneID == pane.id,
                     onFocus: { layoutManager.focusedPaneID = pane.id }
                 )
+                .padding(3)
                 .frame(
                     width: availableWidth * row.paneWeights[paneIndex] / totalWeight,
                     height: height

@@ -44,38 +44,66 @@ struct PathBarView: View {
                 specialLocationHeader
             }
         }
-        .frame(height: 32)
-        .background(isFocused ? MFDTheme.paneHeaderBackground : MFDTheme.paneHeaderBackground.opacity(0.6))
+        .frame(height: 36)
+        .background(isFocused ? MFDTheme.paneHeaderBackground : MFDTheme.paneHeaderBackground.opacity(0.65))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(MFDTheme.subtleHairline)
+                .frame(height: 0.5)
+        }
     }
 
     // MARK: - Breadcrumb Header
 
     private var breadcrumbHeader: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 2) {
+                HStack(spacing: 3) {
                     ForEach(Array(pathComponents.enumerated()), id: \.offset) { index, component in
                         let isLast = index == pathComponents.count - 1
                         Button(action: {
                             onFocus()
                             onNavigate(component.url)
                         }) {
-                            HStack(spacing: 3) {
-                                if index == 0 {
-                                    Image(systemName: "laptopcomputer")
-                                        .font(.system(size: 10))
+                            if isLast {
+                                HStack(spacing: 5) {
+                                    Image(systemName: "folder.fill")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(MFDTheme.primaryAccent)
+                                    Text(component.name)
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .lineLimit(1)
                                 }
-                                Text(component.name)
-                                    .font(.system(size: 11, weight: isLast ? .semibold : .regular))
-                                    .lineLimit(1)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .fill(isFocused ? MFDTheme.primaryAccent.opacity(0.18) : Color.primary.opacity(0.06))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                                .stroke(isFocused ? MFDTheme.primaryAccent.opacity(0.35) : Color.clear, lineWidth: 1)
+                                        )
+                                )
+                                .foregroundStyle(isFocused ? MFDTheme.primaryAccent : .primary)
+                            } else {
+                                HStack(spacing: 3) {
+                                    if index == 0 {
+                                        Image(systemName: "laptopcomputer")
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Text(component.name)
+                                        .font(.system(size: 11, weight: .regular))
+                                        .lineLimit(1)
+                                }
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(breadcrumbBackground(for: component.url, at: index))
+                                )
+                                .foregroundStyle(.secondary)
                             }
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .background(
-                                RoundedRectangle(cornerRadius: 5)
-                                    .fill(breadcrumbBackground(for: component.url, at: index))
-                            )
-                            .foregroundStyle(isLast ? MFDTheme.primaryAccent : (isFocused ? .primary : .secondary))
                         }
                         .buttonStyle(.plain)
                         .onDrop(
@@ -97,15 +125,19 @@ struct PathBarView: View {
                 .padding(.horizontal, 4)
             }
 
-            Spacer(minLength: 4)
+            Spacer(minLength: 6)
 
             filterToggleButton
 
             viewModePicker
 
+            Rectangle()
+                .fill(MFDTheme.subtleHairline)
+                .frame(width: 1, height: 14)
+
             controls(canEdit: true)
         }
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 8)
         .onTapGesture(count: 2, perform: startEditing)
     }
 
@@ -224,14 +256,26 @@ struct PathBarView: View {
             onFocus()
             isFilterFocused = true
         } label: {
-            Image(systemName: viewModel.isFiltering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(viewModel.isFiltering ? MFDTheme.primaryAccent : .secondary)
-                .frame(width: 20, height: 20)
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(viewModel.isFiltering ? MFDTheme.primaryAccent.opacity(0.12) : MFDTheme.breadcrumbPillBackground)
-                )
+            HStack(spacing: 4) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 10, weight: .semibold))
+                if viewModel.isFiltering {
+                    Text(viewModel.filterText)
+                        .font(.system(size: 10, weight: .semibold))
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(viewModel.isFiltering ? MFDTheme.primaryAccent.opacity(0.18) : MFDTheme.breadcrumbPillBackground)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .stroke(viewModel.isFiltering ? MFDTheme.primaryAccent.opacity(0.5) : Color.primary.opacity(0.06), lineWidth: 0.8)
+                    )
+            )
+            .foregroundStyle(viewModel.isFiltering ? MFDTheme.primaryAccent : .secondary)
         }
         .buttonStyle(.plain)
         .help("Filter files (/)")
@@ -253,11 +297,11 @@ struct PathBarView: View {
     }
 
     private func controls(canEdit: Bool) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 2) {
             Button(action: onRefresh) {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 10))
-                    .frame(width: 18, height: 18)
+                    .frame(width: 20, height: 20)
             }
             .buttonStyle(.plain)
             .help("Refresh")
@@ -266,7 +310,7 @@ struct PathBarView: View {
                 Button(action: startEditing) {
                     Image(systemName: "pencil")
                         .font(.system(size: 10))
-                        .frame(width: 18, height: 18)
+                        .frame(width: 20, height: 20)
                 }
                 .buttonStyle(.plain)
                 .help("Edit Path")
@@ -276,7 +320,7 @@ struct PathBarView: View {
                 Button(action: onRemovePane) {
                     Image(systemName: "xmark")
                         .font(.system(size: 8, weight: .bold))
-                        .frame(width: 18, height: 18)
+                        .frame(width: 20, height: 20)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)

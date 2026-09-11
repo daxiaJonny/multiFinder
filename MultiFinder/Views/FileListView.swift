@@ -468,6 +468,7 @@ private struct FileTableClickMonitor: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.anchorView = nsView
         context.coordinator.items = items
         context.coordinator.onEditingItemChange = onEditingItemChange
         context.coordinator.onRename = onRename
@@ -475,6 +476,9 @@ private struct FileTableClickMonitor: NSViewRepresentable {
         context.coordinator.onBlankContextMenu = onBlankContextMenu
         context.coordinator.cancelEditingIfItemWasRemoved()
         context.coordinator.handle(renameRequest: renameRequest)
+        DispatchQueue.main.async {
+            context.coordinator.configureTableViewAppearance(for: nsView)
+        }
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
@@ -642,10 +646,26 @@ private struct FileTableClickMonitor: NSViewRepresentable {
             return (item, row, column)
         }
 
+        func configureTableViewAppearance(for anchorView: NSView) {
+            guard let tableView = resolveTableView(for: anchorView) else { return }
+            if tableView.usesAlternatingRowBackgroundColors {
+                tableView.usesAlternatingRowBackgroundColors = false
+            }
+            tableView.backgroundColor = .clear
+            tableView.enclosingScrollView?.backgroundColor = .clear
+            tableView.enclosingScrollView?.drawsBackground = false
+        }
+
         private func isNameColumn(_ column: NSTableColumn, in tableView: NSTableView) -> Bool {
             if tableView !== resolvedTableView {
                 resolvedTableView = tableView
                 nameColumnIdentifier = tableView.tableColumns.first?.identifier
+                if tableView.usesAlternatingRowBackgroundColors {
+                    tableView.usesAlternatingRowBackgroundColors = false
+                }
+                tableView.backgroundColor = .clear
+                tableView.enclosingScrollView?.backgroundColor = .clear
+                tableView.enclosingScrollView?.drawsBackground = false
             }
             return column.identifier == nameColumnIdentifier
         }

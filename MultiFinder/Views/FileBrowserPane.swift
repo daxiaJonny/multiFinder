@@ -26,28 +26,31 @@ struct FileBrowserPane: View {
             .id(pane.selectedTab.id)
         }
         .frame(minWidth: 170, minHeight: 130)
+        .background(isFocused ? Color(nsColor: .controlBackgroundColor) : Color(nsColor: .windowBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(
+                    isHighlighted
+                        ? MFDTheme.primaryAccent
+                        : (isFocused ? MFDTheme.primaryAccent.opacity(0.65) : MFDTheme.subtleHairline),
+                    lineWidth: isHighlighted ? 2.5 : (isFocused ? 1.5 : 0.8)
+                )
+        )
         .overlay(alignment: .top) {
             if isFocused {
-                Rectangle()
-                    .fill(MFDTheme.activeIndicator)
-                    .frame(height: 2.5)
-                    .shadow(color: MFDTheme.activeIndicator.opacity(0.6), radius: 3, y: 1)
+                Capsule()
+                    .fill(MFDTheme.primaryAccent)
+                    .frame(width: 56, height: 3)
+                    .shadow(color: MFDTheme.primaryAccent.opacity(0.8), radius: 4, y: 1)
+                    .padding(.top, 2)
                     .transition(.opacity)
             }
         }
-        .overlay(
-            RoundedRectangle(cornerRadius: 0)
-                .stroke(
-                    isHighlighted ? MFDTheme.primaryAccent : MFDTheme.subtleHairline,
-                    lineWidth: isHighlighted ? 2.5 : 0.5
-                )
-                .shadow(
-                    color: isHighlighted ? MFDTheme.primaryAccent.opacity(0.6) : .clear,
-                    radius: isHighlighted ? 6 : 0
-                )
-        )
-        .animation(.easeInOut(duration: 0.2), value: isFocused)
-        .animation(.easeInOut(duration: 0.2), value: isHighlighted)
+        .shadow(color: Color.black.opacity(isFocused ? 0.16 : 0.05), radius: isFocused ? 6 : 2, y: 1)
+        .opacity(isFocused ? 1.0 : 0.88)
+        .animation(.easeInOut(duration: 0.18), value: isFocused)
+        .animation(.easeInOut(duration: 0.18), value: isHighlighted)
         .contextMenu {
             paneContextMenu
         }
@@ -368,11 +371,31 @@ private struct PaneTabContent: View {
     }
 
     private var statusBar: some View {
-        HStack {
-            Text(itemCountText)
+        HStack(spacing: 8) {
+            HStack(spacing: 4) {
+                Image(systemName: "folder")
+                    .font(.system(size: 9))
+                Text(itemCountText)
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+
             Spacer()
+
             if !viewModel.selectedItems.isEmpty {
-                Text(L10n.format("%lld selected", Int64(viewModel.selectedItems.count)))
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 9))
+                    Text(L10n.format("%lld selected", Int64(viewModel.selectedItems.count)))
+                }
+                .font(.system(size: 10, weight: .medium))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    Capsule()
+                        .fill(MFDTheme.primaryAccent.opacity(0.15))
+                )
+                .foregroundStyle(MFDTheme.primaryAccent)
             }
             if viewModel.isLoading {
                 ProgressView()

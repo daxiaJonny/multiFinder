@@ -66,14 +66,14 @@ struct SidebarView: View {
         GeometryReader { geometry in
             List(selection: $selectedDestination) {
                 if !favoritesStore.favorites.isEmpty {
-                    Section(L10n.string("Favorites")) {
+                    Section(header: sectionHeader(L10n.string("Favorites"))) {
                         ForEach(favoritesStore.favorites) { favorite in
                             favoriteRow(favorite)
                         }
                     }
                 }
 
-                Section(L10n.string("Personal Favorites")) {
+                Section(header: sectionHeader(L10n.string("Personal Favorites"))) {
                     sidebarRow(
                         SidebarItem(
                             name: L10n.string("Recents"),
@@ -88,7 +88,7 @@ struct SidebarView: View {
                 }
 
                 if let iCloudDriveURL {
-                    Section(L10n.string("iCloud Drive")) {
+                    Section(header: sectionHeader(L10n.string("iCloud Drive"))) {
                         sidebarRow(
                             SidebarItem(
                                 name: L10n.string("iCloud Drive"),
@@ -100,7 +100,7 @@ struct SidebarView: View {
                     }
                 }
 
-                Section(L10n.string("Locations")) {
+                Section(header: sectionHeader(L10n.string("Locations"))) {
                     ForEach(volumeStore.volumes) { volume in
                         volumeRow(volume, showCapacity: geometry.size.width >= 220)
                     }
@@ -203,8 +203,31 @@ struct SidebarView: View {
         return candidates.first(where: isDirectory)
     }
 
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(.secondary)
+            .textCase(.uppercase)
+    }
+
+    private func iconColor(for item: SidebarItem) -> Color {
+        if item.isRecents { return MFDTheme.secondaryAccent }
+        switch item.id {
+        case "home": return .blue
+        case "desktop": return Color(red: 0.20, green: 0.65, blue: 0.95)
+        case "applications": return .indigo
+        case "documents": return Color(red: 0.35, green: 0.45, blue: 0.95)
+        case "downloads": return Color(red: 0.15, green: 0.75, blue: 0.65)
+        case "movies": return .purple
+        case "music": return .pink
+        case "pictures": return .orange
+        case "icloud-drive": return .cyan
+        default: return MFDTheme.primaryAccent
+        }
+    }
+
     private func favoriteRow(_ favorite: FileFavorite) -> some View {
-        SidebarLabel(icon: "star.fill", name: favorite.name)
+        SidebarLabel(icon: "star.fill", name: favorite.name, iconColor: .yellow)
             .tag(SidebarDestination.directory(favorite.url))
             .help(favorite.url.path)
             .contextMenu {
@@ -215,7 +238,7 @@ struct SidebarView: View {
     }
 
     private func sidebarRow(_ item: SidebarItem) -> some View {
-        SidebarLabel(icon: item.icon, name: item.name)
+        SidebarLabel(icon: item.icon, name: item.name, iconColor: iconColor(for: item))
             .tag(item.destination)
             .help(item.url?.path ?? item.name)
     }
@@ -331,12 +354,14 @@ struct SidebarView: View {
 private struct SidebarLabel: View {
     let icon: String
     let name: String
+    var iconColor: Color = MFDTheme.primaryAccent
 
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: icon)
                 .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(.tint)
+                .foregroundStyle(iconColor)
+                .font(.system(size: 13, weight: .medium))
                 .frame(width: 18)
 
             Text(name)
