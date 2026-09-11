@@ -38,6 +38,7 @@ struct GitPulseBadgeView: View {
                         .foregroundStyle(MFDTheme.primaryAccent)
                 }
             }
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
             .background(

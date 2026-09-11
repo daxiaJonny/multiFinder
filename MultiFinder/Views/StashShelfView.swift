@@ -222,6 +222,31 @@ struct StashShelfView: View {
             Text(L10n.string("Collect files across panes, then dump them all at once."))
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
+
+            if let pane = layoutManager.focusedPane, !pane.selectedItemURLs.isEmpty {
+                Button {
+                    stashStore.add(urls: pane.selectedItemURLs)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus.circle.fill")
+                        Text("\(L10n.string("Stash Selected")) (\(pane.selectedItemURLs.count))")
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(MFDTheme.primaryAccent)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule()
+                            .fill(MFDTheme.primaryAccent.opacity(0.12))
+                            .overlay(
+                                Capsule()
+                                    .stroke(MFDTheme.primaryAccent.opacity(0.3), lineWidth: 0.8)
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 2)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 24)

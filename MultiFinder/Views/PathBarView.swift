@@ -71,80 +71,98 @@ struct PathBarView: View {
 
     private var breadcrumbHeader: some View {
         HStack(spacing: 6) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 3) {
-                    ForEach(Array(pathComponents.enumerated()), id: \.offset) { index, component in
-                        let isLast = index == pathComponents.count - 1
-                        Button(action: {
-                            onFocus()
-                            onNavigate(component.url)
-                        }) {
-                            if isLast {
-                                HStack(spacing: 5) {
-                                    Image(systemName: "folder.fill")
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(MFDTheme.primaryAccent)
-                                    Text(component.name)
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .lineLimit(1)
-                                }
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                        .fill(isFocused ? MFDTheme.primaryAccent.opacity(0.18) : Color.primary.opacity(0.06))
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                                .stroke(isFocused ? MFDTheme.primaryAccent.opacity(0.35) : Color.clear, lineWidth: 1)
-                                        )
-                                )
-                                .foregroundStyle(isFocused ? MFDTheme.primaryAccent : .primary)
-                            } else {
-                                HStack(spacing: 3) {
-                                    if index == 0 {
-                                        Image(systemName: "laptopcomputer")
-                                            .font(.system(size: 10))
-                                            .foregroundStyle(.secondary)
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 3) {
+                        ForEach(Array(pathComponents.enumerated()), id: \.offset) { index, component in
+                            let isLast = index == pathComponents.count - 1
+                            Button(action: {
+                                onFocus()
+                                onNavigate(component.url)
+                            }) {
+                                if isLast {
+                                    HStack(spacing: 5) {
+                                        Image(systemName: "folder.fill")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(MFDTheme.primaryAccent)
+                                        Text(component.name)
+                                            .font(.system(size: 12, weight: .semibold))
+                                            .lineLimit(1)
                                     }
-                                    Text(component.name)
-                                        .font(.system(size: 11, weight: .regular))
-                                        .lineLimit(1)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                            .fill(isFocused ? MFDTheme.primaryAccent.opacity(0.18) : Color.primary.opacity(0.06))
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                                    .stroke(isFocused ? MFDTheme.primaryAccent.opacity(0.35) : Color.clear, lineWidth: 1)
+                                            )
+                                    )
+                                    .foregroundStyle(isFocused ? MFDTheme.primaryAccent : .primary)
+                                } else {
+                                    HStack(spacing: 3) {
+                                        if index == 0 {
+                                            Image(systemName: "laptopcomputer")
+                                                .font(.system(size: 10))
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Text(component.name)
+                                            .font(.system(size: 11, weight: .regular))
+                                            .lineLimit(1)
+                                    }
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 3)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .fill(breadcrumbBackground(for: component.url, at: index))
+                                    )
+                                    .foregroundStyle(.secondary)
                                 }
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 4)
-                                        .fill(breadcrumbBackground(for: component.url, at: index))
+                            }
+                            .id(index)
+                            .buttonStyle(.plain)
+                            .onDrop(
+                                of: [UTType.fileURL],
+                                delegate: BreadcrumbDropDelegate(
+                                    destination: component.url,
+                                    targetedURL: $dropTargetURL,
+                                    onTransferDroppedItems: onTransferDroppedItems
                                 )
-                                .foregroundStyle(.secondary)
+                            )
+
+                            if index < pathComponents.count - 1 {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 7, weight: .bold))
+                                    .foregroundStyle(.tertiary)
                             }
                         }
-                        .buttonStyle(.plain)
-                        .onDrop(
-                            of: [UTType.fileURL],
-                            delegate: BreadcrumbDropDelegate(
-                                destination: component.url,
-                                targetedURL: $dropTargetURL,
-                                onTransferDroppedItems: onTransferDroppedItems
-                            )
-                        )
 
-                        if index < pathComponents.count - 1 {
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 7, weight: .bold))
-                                .foregroundStyle(.tertiary)
+                        if let currentURL = viewModel.currentURL,
+                           let gitStatus = gitPulseStore.status(for: currentURL) {
+                            GitPulseBadgeView(status: gitStatus, onFocus: onFocus)
+                                .id("git-pulse")
+                                .padding(.leading, 3)
                         }
                     }
+                    .padding(.horizontal, 4)
                 }
-                .padding(.horizontal, 4)
+                .onAppear {
+                    proxy.scrollTo("git-pulse", anchor: .trailing)
+                    if viewModel.currentURL != nil && !pathComponents.isEmpty {
+                        proxy.scrollTo(pathComponents.count - 1, anchor: .trailing)
+                    }
+                }
+                .onChange(of: pathComponents.count) { count in
+                    proxy.scrollTo("git-pulse", anchor: .trailing)
+                    if count > 0 {
+                        proxy.scrollTo(count - 1, anchor: .trailing)
+                    }
+                }
             }
+            .layoutPriority(1)
 
-            Spacer(minLength: 6)
-
-            if let currentURL = viewModel.currentURL,
-               let gitStatus = gitPulseStore.status(for: currentURL) {
-                GitPulseBadgeView(status: gitStatus, onFocus: onFocus)
-            }
+            Spacer(minLength: 4)
 
             filterToggleButton
 
