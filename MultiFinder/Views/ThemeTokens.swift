@@ -104,6 +104,24 @@ public enum MFDTheme {
                 : NSColor(white: 0.0, alpha: 0.08)
         })
     }
+
+    /// Ambient glow tint for the active pane (native GPU composited, zero memory overhead).
+    public static var activeAmbientGlow: Color {
+        primaryAccent.opacity(0.20)
+    }
+
+    /// Specular highlight bevel gradient for focused card containers.
+    public static var specularHighlightGradient: LinearGradient {
+        LinearGradient(
+            colors: [
+                Color.white.opacity(0.16),
+                Color.white.opacity(0.04),
+                Color.clear
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
 }
 
 // MARK: - AppKit Table Zebra Stripe Eliminator

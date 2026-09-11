@@ -195,6 +195,7 @@ final class LayoutManager: ObservableObject {
         }
     }
     @Published var isGoToFolderPresented = false
+    @Published var isCommandPalettePresented = false
     @Published private(set) var highlightedPaneID: UUID? = nil
     weak var workspaceWindow: NSWindow?
 
@@ -260,6 +261,18 @@ final class LayoutManager: ObservableObject {
 
     func dismissGoToFolder() {
         isGoToFolderPresented = false
+    }
+
+    func toggleCommandPalette() {
+        isCommandPalettePresented.toggle()
+    }
+
+    func presentCommandPalette() {
+        isCommandPalettePresented = true
+    }
+
+    func dismissCommandPalette() {
+        isCommandPalettePresented = false
     }
 
     @discardableResult

@@ -216,6 +216,12 @@ struct MultiFinderApp: App {
             }
 
             CommandMenu("View") {
+                Button("Command Palette…") {
+                    layoutManager?.toggleCommandPalette()
+                }
+                .keyboardShortcut("k", modifiers: .command)
+                .disabled(layoutManager == nil)
+
                 Button {
                     layoutManager?.toggleSidebar()
                 } label: {

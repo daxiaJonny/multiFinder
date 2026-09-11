@@ -33,15 +33,29 @@ struct FileBrowserPane: View {
                 .stroke(
                     isHighlighted
                         ? MFDTheme.primaryAccent
-                        : (isFocused ? MFDTheme.primaryAccent.opacity(0.50) : MFDTheme.subtleHairline),
+                        : (isFocused ? MFDTheme.primaryAccent.opacity(0.55) : MFDTheme.subtleHairline),
                     lineWidth: isHighlighted ? 2.0 : (isFocused ? 1.0 : 0.8)
                 )
+        )
+        .overlay(
+            Group {
+                if isFocused {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(MFDTheme.specularHighlightGradient, lineWidth: 1.0)
+                        .blendMode(.plusLighter)
+                }
+            }
         )
         .overlay {
             PaneFocusMonitor(onFocus: onFocus)
                 .allowsHitTesting(false)
         }
-        .shadow(color: Color.black.opacity(isFocused ? 0.16 : 0.05), radius: isFocused ? 6 : 2, y: 1)
+        .shadow(
+            color: isFocused ? MFDTheme.activeAmbientGlow : Color.clear,
+            radius: isFocused ? 10 : 0,
+            y: isFocused ? 2 : 0
+        )
+        .shadow(color: Color.black.opacity(isFocused ? 0.18 : 0.05), radius: isFocused ? 5 : 2, y: 1)
         .animation(.easeOut(duration: 0.12), value: isFocused)
         .animation(.easeOut(duration: 0.12), value: isHighlighted)
         .contextMenu {

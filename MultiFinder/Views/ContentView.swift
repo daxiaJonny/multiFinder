@@ -266,6 +266,13 @@ private struct WorkspaceSurface: View {
 
     var body: some View {
         WorkspaceLayoutView(layoutManager: layoutManager, focusedPane: focusedPane)
+        .overlay {
+            if layoutManager.isCommandPalettePresented {
+                CommandPaletteView(layoutManager: layoutManager)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: layoutManager.isCommandPalettePresented)
         .navigationTitle(focusedPane.title)
         .toolbar {
             BrowserToolbar(
