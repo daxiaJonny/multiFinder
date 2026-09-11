@@ -37,6 +37,10 @@ struct MultiFinderApp: App {
     @StateObject private var clipboard = FileClipboard.shared
     @StateObject private var favoritesStore = FavoritesStore.shared
 
+    init() {
+        NSTableView.disableZebraStripesGlobally()
+    }
+
     var body: some Scene {
         WindowGroup(id: "workspace") {
             WorkspaceSceneRoot()

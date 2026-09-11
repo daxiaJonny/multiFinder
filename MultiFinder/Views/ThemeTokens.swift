@@ -105,3 +105,41 @@ public enum MFDTheme {
         })
     }
 }
+
+// MARK: - AppKit Table Zebra Stripe Eliminator
+
+extension NSTableView {
+    private static var isZebraStripesDisabled = false
+
+    /// Permanently eliminates alternating row zebra stripes at the AppKit level
+    /// so they never draw on initial render or during view state updates.
+    public static func disableZebraStripesGlobally() {
+        guard !isZebraStripesDisabled else { return }
+        isZebraStripesDisabled = true
+
+        let setterSelector = #selector(setter: usesAlternatingRowBackgroundColors)
+        let swizzledSetterSelector = #selector(mfd_setUsesAlternatingRowBackgroundColors(_:))
+
+        if let origMethod = class_getInstanceMethod(NSTableView.self, setterSelector),
+           let swizzMethod = class_getInstanceMethod(NSTableView.self, swizzledSetterSelector) {
+            method_exchangeImplementations(origMethod, swizzMethod)
+        }
+
+        let getterSelector = #selector(getter: usesAlternatingRowBackgroundColors)
+        let swizzledGetterSelector = #selector(mfd_usesAlternatingRowBackgroundColors)
+
+        if let origMethod = class_getInstanceMethod(NSTableView.self, getterSelector),
+           let swizzMethod = class_getInstanceMethod(NSTableView.self, swizzledGetterSelector) {
+            method_exchangeImplementations(origMethod, swizzMethod)
+        }
+    }
+
+    @objc private func mfd_setUsesAlternatingRowBackgroundColors(_ value: Bool) {
+        // Intercept and force false: Prevents SwiftUI Table from ever enabling zebra stripes!
+        mfd_setUsesAlternatingRowBackgroundColors(false)
+    }
+
+    @objc private func mfd_usesAlternatingRowBackgroundColors() -> Bool {
+        return false
+    }
+}

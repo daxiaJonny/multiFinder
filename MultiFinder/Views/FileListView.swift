@@ -476,9 +476,7 @@ private struct FileTableClickMonitor: NSViewRepresentable {
         context.coordinator.onBlankContextMenu = onBlankContextMenu
         context.coordinator.cancelEditingIfItemWasRemoved()
         context.coordinator.handle(renameRequest: renameRequest)
-        DispatchQueue.main.async {
-            context.coordinator.configureTableViewAppearance(for: nsView)
-        }
+        context.coordinator.configureTableViewAppearance(for: nsView)
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {

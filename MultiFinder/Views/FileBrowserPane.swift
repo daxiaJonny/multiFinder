@@ -42,7 +42,6 @@ struct FileBrowserPane: View {
                 .allowsHitTesting(false)
         }
         .shadow(color: Color.black.opacity(isFocused ? 0.16 : 0.05), radius: isFocused ? 6 : 2, y: 1)
-        .opacity(isFocused ? 1.0 : 0.88)
         .animation(.easeOut(duration: 0.12), value: isFocused)
         .animation(.easeOut(duration: 0.12), value: isHighlighted)
         .contextMenu {
