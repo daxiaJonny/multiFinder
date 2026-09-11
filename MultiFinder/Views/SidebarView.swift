@@ -270,11 +270,11 @@ struct SidebarView: View {
                         Button {
                             favoritesStore.updateIcon(id: favorite.id, icon: option.systemName)
                         } label: {
-                            Label(option.name, systemImage: option.systemName)
+                            Text(favorite.customIcon == option.systemName ? "✓ \(option.emoji)  \(option.name)" : "   \(option.emoji)  \(option.name)")
                         }
                     }
                     Divider()
-                    Button("默认图标 (星标)") {
+                    Button("默认图标 (⭐️ 星标)") {
                         favoritesStore.updateIcon(id: favorite.id, icon: nil)
                     }
                 }
@@ -330,7 +330,7 @@ struct SidebarView: View {
                         Button {
                             preferences.setIcon(option.systemName, for: item.id)
                         } label: {
-                            Label(option.name, systemImage: option.systemName)
+                            Text(preferences.customIcons[item.id] == option.systemName ? "✓ \(option.emoji)  \(option.name)" : "   \(option.emoji)  \(option.name)")
                         }
                     }
                     Divider()
@@ -559,27 +559,28 @@ struct SidebarColorOption: Identifiable, Hashable {
 struct SidebarIconOption: Identifiable, Hashable {
     let id: String
     let name: String
+    let emoji: String
     let systemName: String
 
     static let all: [SidebarIconOption] = [
-        SidebarIconOption(id: "star", name: "星标", systemName: "star.fill"),
-        SidebarIconOption(id: "folder", name: "文件夹", systemName: "folder.fill"),
-        SidebarIconOption(id: "code", name: "代码工程", systemName: "chevron.left.forwardslash.chevron.right"),
-        SidebarIconOption(id: "terminal", name: "终端", systemName: "terminal.fill"),
-        SidebarIconOption(id: "rocket", name: "火箭项目", systemName: "rocket.fill"),
-        SidebarIconOption(id: "box", name: "仓库依赖", systemName: "shippingbox.fill"),
-        SidebarIconOption(id: "tag", name: "标签分类", systemName: "tag.fill"),
-        SidebarIconOption(id: "bookmark", name: "书签", systemName: "bookmark.fill"),
-        SidebarIconOption(id: "lightbulb", name: "创意想法", systemName: "lightbulb.fill"),
-        SidebarIconOption(id: "bolt", name: "核心快速", systemName: "bolt.fill"),
-        SidebarIconOption(id: "target", name: "目标成就", systemName: "target"),
-        SidebarIconOption(id: "note", name: "笔记周报", systemName: "note.text"),
-        SidebarIconOption(id: "palette", name: "设计素材", systemName: "paintpalette.fill"),
-        SidebarIconOption(id: "heart", name: "特别喜爱", systemName: "heart.fill"),
-        SidebarIconOption(id: "coffee", name: "日常休闲", systemName: "cup.and.saucer.fill"),
-        SidebarIconOption(id: "flame", name: "紧急热门", systemName: "flame.fill"),
-        SidebarIconOption(id: "wrench", name: "工具配置", systemName: "wrench.and.screwdriver.fill"),
-        SidebarIconOption(id: "globe", name: "网络网站", systemName: "globe"),
+        SidebarIconOption(id: "star", name: "星标", emoji: "⭐️", systemName: "star.fill"),
+        SidebarIconOption(id: "folder", name: "文件夹", emoji: "📁", systemName: "folder.fill"),
+        SidebarIconOption(id: "code", name: "代码工程", emoji: "💻", systemName: "chevron.left.forwardslash.chevron.right"),
+        SidebarIconOption(id: "terminal", name: "终端", emoji: "🖥", systemName: "terminal.fill"),
+        SidebarIconOption(id: "rocket", name: "火箭项目", emoji: "🚀", systemName: "rocket.fill"),
+        SidebarIconOption(id: "box", name: "仓库依赖", emoji: "📦", systemName: "shippingbox.fill"),
+        SidebarIconOption(id: "tag", name: "标签分类", emoji: "🏷", systemName: "tag.fill"),
+        SidebarIconOption(id: "bookmark", name: "书签", emoji: "🔖", systemName: "bookmark.fill"),
+        SidebarIconOption(id: "lightbulb", name: "创意想法", emoji: "💡", systemName: "lightbulb.fill"),
+        SidebarIconOption(id: "bolt", name: "核心快速", emoji: "⚡️", systemName: "bolt.fill"),
+        SidebarIconOption(id: "target", name: "目标成就", emoji: "🎯", systemName: "target"),
+        SidebarIconOption(id: "note", name: "笔记周报", emoji: "📝", systemName: "note.text"),
+        SidebarIconOption(id: "palette", name: "设计素材", emoji: "🎨", systemName: "paintpalette.fill"),
+        SidebarIconOption(id: "heart", name: "特别喜爱", emoji: "❤️", systemName: "heart.fill"),
+        SidebarIconOption(id: "coffee", name: "日常休闲", emoji: "☕️", systemName: "cup.and.saucer.fill"),
+        SidebarIconOption(id: "flame", name: "紧急热门", emoji: "🔥", systemName: "flame.fill"),
+        SidebarIconOption(id: "wrench", name: "工具配置", emoji: "🛠", systemName: "wrench.and.screwdriver.fill"),
+        SidebarIconOption(id: "globe", name: "网络网站", emoji: "🌐", systemName: "globe"),
     ]
 }
 
