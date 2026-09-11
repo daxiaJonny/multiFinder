@@ -26,25 +26,25 @@ struct FileListView: View {
             TableColumn("Name", sortUsing: FileItemComparator(field: .name)) { item in
                 FileTableNameCell(item: item, renameState: inlineRenameState)
             }
-            .width(min: 140, ideal: 280)
+            .width(min: 100, ideal: 180)
 
             TableColumn("Date Modified", sortUsing: FileItemComparator(field: .date)) { item in
                 Text(item.modificationDate, format: .dateTime.year().month(.twoDigits).day().hour().minute())
                     .foregroundStyle(.secondary)
             }
-            .width(min: 125, ideal: 160, max: 220)
+            .width(min: 110, ideal: 130, max: 200)
 
             TableColumn("Size", sortUsing: FileItemComparator(field: .size)) { item in
                 Text(item.isDirectory ? "--" : ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file))
                     .foregroundStyle(.secondary)
             }
-            .width(min: 65, ideal: 85, max: 130)
+            .width(min: 55, ideal: 70, max: 110)
 
             TableColumn("Kind", sortUsing: FileItemComparator(field: .kind)) { item in
                 Text(item.kind)
                     .foregroundStyle(.secondary)
             }
-            .width(min: 90, ideal: 130, max: 220)
+            .width(min: 65, ideal: 85, max: 150)
         } rows: {
             ForEach(viewModel.visibleItems) { item in
                 // Table drop targets must be attached to TableRowContent, not hosted cell views.
@@ -650,8 +650,14 @@ private struct FileTableClickMonitor: NSViewRepresentable {
                 tableView.usesAlternatingRowBackgroundColors = false
             }
             tableView.backgroundColor = .clear
-            tableView.enclosingScrollView?.backgroundColor = .clear
-            tableView.enclosingScrollView?.drawsBackground = false
+            if let scrollView = tableView.enclosingScrollView {
+                scrollView.backgroundColor = .clear
+                scrollView.drawsBackground = false
+                scrollView.autohidesScrollers = true
+                scrollView.scrollerStyle = .overlay
+                scrollView.horizontalScroller?.scrollerStyle = .overlay
+                scrollView.verticalScroller?.scrollerStyle = .overlay
+            }
         }
 
         private func isNameColumn(_ column: NSTableColumn, in tableView: NSTableView) -> Bool {
@@ -662,8 +668,14 @@ private struct FileTableClickMonitor: NSViewRepresentable {
                     tableView.usesAlternatingRowBackgroundColors = false
                 }
                 tableView.backgroundColor = .clear
-                tableView.enclosingScrollView?.backgroundColor = .clear
-                tableView.enclosingScrollView?.drawsBackground = false
+                if let scrollView = tableView.enclosingScrollView {
+                    scrollView.backgroundColor = .clear
+                    scrollView.drawsBackground = false
+                    scrollView.autohidesScrollers = true
+                    scrollView.scrollerStyle = .overlay
+                    scrollView.horizontalScroller?.scrollerStyle = .overlay
+                    scrollView.verticalScroller?.scrollerStyle = .overlay
+                }
             }
             return column.identifier == nameColumnIdentifier
         }

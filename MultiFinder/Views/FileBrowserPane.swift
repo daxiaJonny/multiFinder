@@ -33,8 +33,8 @@ struct FileBrowserPane: View {
                 .stroke(
                     isHighlighted
                         ? MFDTheme.primaryAccent
-                        : (isFocused ? MFDTheme.primaryAccent.opacity(0.65) : MFDTheme.subtleHairline),
-                    lineWidth: isHighlighted ? 2.5 : (isFocused ? 1.5 : 0.8)
+                        : (isFocused ? MFDTheme.primaryAccent.opacity(0.50) : MFDTheme.subtleHairline),
+                    lineWidth: isHighlighted ? 2.0 : (isFocused ? 1.0 : 0.8)
                 )
         )
         .overlay {

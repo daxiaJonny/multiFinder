@@ -143,3 +143,29 @@ extension NSTableView {
         return false
     }
 }
+
+// MARK: - AppKit Scroller Overlay Enforcer
+
+extension NSScroller {
+    private static var isOverlayEnforced = false
+
+    /// Forces all scrollbars across the app to use modern floating overlay style,
+    /// preventing legacy scrollbar tracks from showing permanent gray lines when a mouse is connected.
+    public static func enforceOverlayGlobally() {
+        guard !isOverlayEnforced else { return }
+        isOverlayEnforced = true
+
+        let metaClass: AnyClass = object_getClass(NSScroller.self)!
+        let sel = #selector(getter: NSScroller.preferredScrollerStyle)
+        let swizzledSel = #selector(NSScroller.mfd_preferredScrollerStyle)
+        if let origMethod = class_getInstanceMethod(metaClass, sel),
+           let swizzMethod = class_getInstanceMethod(metaClass, swizzledSel) {
+            method_exchangeImplementations(origMethod, swizzMethod)
+        }
+    }
+
+    @objc public static func mfd_preferredScrollerStyle() -> NSScroller.Style {
+        return .overlay
+    }
+}
+
