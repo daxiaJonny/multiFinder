@@ -915,7 +915,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         return sources
     }
 
-    private static func isDirectory(_ url: URL) -> Bool {
+    static func isDirectory(_ url: URL) -> Bool {
         (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
     }
 

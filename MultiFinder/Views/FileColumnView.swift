@@ -525,6 +525,14 @@ struct FinderItemsContextMenu: View {
 
             Divider()
 
+            Button("Add to Stash Shelf") {
+                prepareSelection()
+                StashShelfStore.shared.add(urls: selectedURLs)
+            }
+            .disabled(selectedItems.isEmpty)
+
+            Divider()
+
             Button("Rename…") {
                 guard let item = selectedItems.first else { return }
                 prepareSelection()

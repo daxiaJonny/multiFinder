@@ -247,6 +247,15 @@ struct FileListView: View {
 
         Divider()
 
+        Button("Add to Stash Shelf") {
+            onFocus()
+            viewModel.selectForContextMenu(selection)
+            StashShelfStore.shared.add(urls: selectedItems.map(\.url))
+        }
+        .disabled(selectedItems.isEmpty)
+
+        Divider()
+
         Button("Rename…") {
             guard let item = selectedItems.first else { return }
             onFocus()

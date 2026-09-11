@@ -522,6 +522,120 @@ struct CommandPaletteView: View {
             }
         }
 
+        // MARK: Stash Shelf
+        items.append(CommandPaletteItem(
+            id: "stash.toggle",
+            title: "Toggle Stash Shelf",
+            subtitle: StashShelfStore.shared.isPresented ? "Hide floating stash shelf" : "Show floating stash shelf",
+            category: .file,
+            iconName: "tray.2.fill",
+            iconColor: .indigo,
+            shortcut: "⌘B",
+            action: { StashShelfStore.shared.togglePresented() }
+        ))
+
+        if let pane = layoutManager.focusedPane, !pane.selectedItems.isEmpty {
+            items.append(CommandPaletteItem(
+                id: "stash.addSelected",
+                title: "Add Selected Items to Stash",
+                subtitle: "Stash \(pane.selectedItems.count) item(s) for cross-pane transfer",
+                category: .file,
+                iconName: "arrow.down.doc.fill",
+                iconColor: .indigo,
+                shortcut: "⌥S",
+                action: {
+                    let urls = pane.selectedItemURLs
+                    StashShelfStore.shared.add(urls: urls)
+                }
+            ))
+        }
+
+        if !StashShelfStore.shared.items.isEmpty, let pane = layoutManager.focusedPane, let currentURL = pane.currentURL {
+            items.append(CommandPaletteItem(
+                id: "stash.dumpCopy",
+                title: "Dump Stash to Active Pane (Copy)",
+                subtitle: "Copy \(StashShelfStore.shared.count) stashed items into \(currentURL.lastPathComponent)",
+                category: .file,
+                iconName: "doc.on.doc.fill",
+                iconColor: .blue,
+                shortcut: "⌥V",
+                action: {
+                    StashShelfStore.shared.transferAll(into: currentURL, operation: .copy)
+                }
+            ))
+
+            items.append(CommandPaletteItem(
+                id: "stash.dumpMove",
+                title: "Dump Stash to Active Pane (Move)",
+                subtitle: "Move \(StashShelfStore.shared.count) stashed items into \(currentURL.lastPathComponent)",
+                category: .file,
+                iconName: "arrow.right.doc.on.clipboard",
+                iconColor: .orange,
+                shortcut: nil,
+                action: {
+                    StashShelfStore.shared.transferAll(into: currentURL, operation: .move)
+                }
+            ))
+
+            items.append(CommandPaletteItem(
+                id: "stash.clear",
+                title: "Clear Stash Shelf",
+                subtitle: "Remove all stashed items",
+                category: .file,
+                iconName: "trash",
+                iconColor: .red,
+                shortcut: nil,
+                action: {
+                    StashShelfStore.shared.clear()
+                }
+            ))
+        }
+
+        // MARK: Git Pulse
+        if let pane = layoutManager.focusedPane,
+           let currentURL = pane.currentURL,
+           let gitStatus = GitPulseStore.shared.status(for: currentURL) {
+            items.append(CommandPaletteItem(
+                id: "git.copyBranch",
+                title: "Git: Copy Branch Name (\(gitStatus.branch))",
+                subtitle: "Copy active Git branch to clipboard",
+                category: .file,
+                iconName: "arrow.triangle.branch",
+                iconColor: .green,
+                shortcut: nil,
+                action: {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(gitStatus.branch, forType: .string)
+                }
+            ))
+
+            items.append(CommandPaletteItem(
+                id: "git.openTerminal",
+                title: "Git: Open Repository in Terminal",
+                subtitle: "Launch terminal at \(gitStatus.repoRootURL.lastPathComponent)",
+                category: .file,
+                iconName: "terminal",
+                iconColor: .green,
+                shortcut: nil,
+                action: {
+                    try? TerminalService.shared.openDirectory(gitStatus.repoRootURL)
+                }
+            ))
+
+            items.append(CommandPaletteItem(
+                id: "git.refresh",
+                title: "Git: Refresh Pulse Status",
+                subtitle: "Re-query git status for active repository",
+                category: .file,
+                iconName: "arrow.clockwise",
+                iconColor: .green,
+                shortcut: nil,
+                action: {
+                    GitPulseStore.shared.refresh(for: gitStatus.repoRootURL, force: true)
+                }
+            ))
+        }
+
         // MARK: AI Tools
         if let pane = layoutManager.focusedPane, pane.isAIAssistantAvailable {
             items.append(CommandPaletteItem(

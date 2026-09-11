@@ -222,6 +222,25 @@ struct MultiFinderApp: App {
                 .keyboardShortcut("k", modifiers: .command)
                 .disabled(layoutManager == nil)
 
+                Button("Stash Shelf") {
+                    StashShelfStore.shared.togglePresented()
+                }
+                .keyboardShortcut("b", modifiers: .command)
+
+                Button("Add Selected to Stash") {
+                    guard let urls = layoutManager?.focusedPane?.selectedItemURLs, !urls.isEmpty else { return }
+                    StashShelfStore.shared.add(urls: urls)
+                }
+                .keyboardShortcut("s", modifiers: .option)
+                .disabled((layoutManager?.focusedPane?.selectedItems.count ?? 0) == 0)
+
+                Button("Dump Stash into Active Pane") {
+                    guard let dest = layoutManager?.focusedPane?.currentURL else { return }
+                    StashShelfStore.shared.transferAll(into: dest, operation: .copy)
+                }
+                .keyboardShortcut("v", modifiers: .option)
+                .disabled(StashShelfStore.shared.items.isEmpty || layoutManager?.focusedPane?.currentURL == nil)
+
                 Button {
                     layoutManager?.toggleSidebar()
                 } label: {

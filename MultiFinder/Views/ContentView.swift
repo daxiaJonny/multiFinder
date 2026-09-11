@@ -266,6 +266,10 @@ private struct WorkspaceSurface: View {
 
     var body: some View {
         WorkspaceLayoutView(layoutManager: layoutManager, focusedPane: focusedPane)
+        .overlay(alignment: .bottomTrailing) {
+            StashShelfView(layoutManager: layoutManager)
+                .padding(16)
+        }
         .overlay {
             if layoutManager.isCommandPalettePresented {
                 CommandPaletteView(layoutManager: layoutManager)
@@ -441,6 +445,7 @@ private struct BrowserToolbar: ToolbarContent {
     @ObservedObject private var favoritesStore = FavoritesStore.shared
     @ObservedObject private var templateStore = WorkspaceTemplateStore.shared
     @ObservedObject private var appSettings = AppSettings.shared
+    @ObservedObject private var stashStore = StashShelfStore.shared
     private let terminalService = TerminalService.shared
     let activeTemplateID: WorkspaceTemplate.ID?
     let onSaveTemplate: () -> Void
@@ -513,6 +518,30 @@ private struct BrowserToolbar: ToolbarContent {
             }
             .buttonStyle(.plain)
             .help("Command Palette (⌘K)")
+
+            Button(action: stashStore.togglePresented) {
+                HStack(spacing: 3) {
+                    Image(systemName: "tray.2.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                    if stashStore.count > 0 {
+                        Text("\(stashStore.count)")
+                            .font(.system(size: 10, weight: .bold))
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(
+                    Capsule()
+                        .fill(stashStore.isPresented ? MFDTheme.primaryAccent.opacity(0.18) : Color.primary.opacity(0.06))
+                        .overlay(
+                            Capsule()
+                                .stroke(stashStore.isPresented ? MFDTheme.primaryAccent.opacity(0.5) : MFDTheme.subtleHairline, lineWidth: 0.8)
+                        )
+                )
+                .foregroundStyle(stashStore.isPresented ? MFDTheme.primaryAccent : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Stash Shelf (⌘B)")
 
             Button(action: pane.toggleAIAssistant) {
                 Image(systemName: "sparkles")

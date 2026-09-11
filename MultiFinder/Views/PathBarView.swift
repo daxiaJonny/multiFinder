@@ -19,6 +19,7 @@ struct PathBarView: View {
     @State private var pathText = ""
     @State private var dropTargetURL: URL?
     @FocusState private var isPathFieldFocused: Bool
+    @ObservedObject private var gitPulseStore = GitPulseStore.shared
 
     private var pathComponents: [(name: String, url: URL)] {
         guard case .directory(let url) = location else { return [] }
@@ -139,6 +140,11 @@ struct PathBarView: View {
             }
 
             Spacer(minLength: 6)
+
+            if let currentURL = viewModel.currentURL,
+               let gitStatus = gitPulseStore.status(for: currentURL) {
+                GitPulseBadgeView(status: gitStatus, onFocus: onFocus)
+            }
 
             filterToggleButton
 
