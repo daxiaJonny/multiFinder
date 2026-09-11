@@ -137,30 +137,27 @@ struct PathBarView: View {
                                     .foregroundStyle(.tertiary)
                             }
                         }
-
-                        if let currentURL = viewModel.currentURL,
-                           let gitStatus = gitPulseStore.status(for: currentURL) {
-                            GitPulseBadgeView(status: gitStatus, onFocus: onFocus)
-                                .id("git-pulse")
-                                .padding(.leading, 3)
-                        }
                     }
                     .padding(.horizontal, 4)
                 }
                 .onAppear {
-                    proxy.scrollTo("git-pulse", anchor: .trailing)
                     if viewModel.currentURL != nil && !pathComponents.isEmpty {
                         proxy.scrollTo(pathComponents.count - 1, anchor: .trailing)
                     }
                 }
                 .onChange(of: pathComponents.count) { count in
-                    proxy.scrollTo("git-pulse", anchor: .trailing)
                     if count > 0 {
                         proxy.scrollTo(count - 1, anchor: .trailing)
                     }
                 }
             }
-            .layoutPriority(1)
+            .frame(minWidth: 40, maxWidth: .infinity, alignment: .leading)
+
+            if let currentURL = viewModel.currentURL,
+               let gitStatus = gitPulseStore.status(for: currentURL) {
+                GitPulseBadgeView(status: gitStatus, onFocus: onFocus)
+                    .fixedSize()
+            }
 
             Spacer(minLength: 4)
 
