@@ -5,7 +5,7 @@ struct WorkspaceLayoutView: View {
     @ObservedObject var layoutManager: LayoutManager
     @ObservedObject var focusedPane: FileBrowserViewModel
 
-    private let dividerThickness: Double = 7
+    private let dividerThickness: Double = 8
 
     var body: some View {
         GeometryReader { geometry in
@@ -23,6 +23,7 @@ struct WorkspaceLayoutView: View {
                     } onCommit: {
                         layoutManager.save()
                     }
+                    .zIndex(50)
                 }
 
                 rowLayout(size: geometry.size)
@@ -60,6 +61,7 @@ struct WorkspaceLayoutView: View {
                     } onCommit: {
                         layoutManager.save()
                     }
+                    .zIndex(50)
                 }
             }
         }
@@ -99,6 +101,7 @@ struct WorkspaceLayoutView: View {
                     } onCommit: {
                         layoutManager.save()
                     }
+                    .zIndex(50)
                 }
             }
         }
@@ -122,40 +125,58 @@ private struct SplitResizeHandle: View {
 
     var body: some View {
         ZStack {
-            Color.clear
+            CursorRectView(cursor: cursor)
+                .allowsHitTesting(false)
+
+            // Hit testing target (comfortably sized at 9 points)
+            Color.black.opacity(0.0001)
                 .frame(
-                    width: axis == .vertical ? 7 : nil,
-                    height: axis == .horizontal ? 7 : nil
+                    width: axis == .vertical ? 9 : nil,
+                    height: axis == .horizontal ? 9 : nil
                 )
 
+            // Visual hairline with luminous accent glow on hover / drag
             Rectangle()
                 .fill(
                     isDragging
                         ? MFDTheme.primaryAccent
-                        : (isHovering ? MFDTheme.primaryAccent.opacity(0.7) : MFDTheme.subtleHairline)
+                        : (isHovering ? MFDTheme.primaryAccent.opacity(0.9) : MFDTheme.subtleHairline)
                 )
                 .frame(
-                    width: axis == .vertical ? (isHovering || isDragging ? 2 : 1) : nil,
-                    height: axis == .horizontal ? (isHovering || isDragging ? 2 : 1) : nil
+                    width: axis == .vertical ? (isDragging ? 3 : (isHovering ? 2.5 : 1)) : nil,
+                    height: axis == .horizontal ? (isDragging ? 3 : (isHovering ? 2.5 : 1)) : nil
+                )
+                .shadow(
+                    color: (isHovering || isDragging) ? MFDTheme.primaryAccent.opacity(0.45) : Color.clear,
+                    radius: isDragging ? 4 : 2.5,
+                    x: 0,
+                    y: 0
                 )
         }
         .frame(
-            width: axis == .vertical ? 7 : nil,
-            height: axis == .horizontal ? 7 : nil
+            width: axis == .vertical ? 8 : nil,
+            height: axis == .horizontal ? 8 : nil
         )
         .contentShape(Rectangle())
-        .onHover { hovering in
-            isHovering = hovering
-            if hovering {
-                cursor.push()
-            } else {
-                NSCursor.pop()
+        .onContinuousHover { phase in
+            switch phase {
+            case .active:
+                isHovering = true
+                cursor.set()
+            case .ended:
+                isHovering = false
+                if !isDragging {
+                    NSCursor.arrow.set()
+                }
             }
         }
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { value in
-                    isDragging = true
+                    if !isDragging {
+                        isDragging = true
+                        cursor.push()
+                    }
                     let translation = axis == .vertical
                         ? value.translation.width
                         : value.translation.height
@@ -163,13 +184,16 @@ private struct SplitResizeHandle: View {
                     previousTranslation = translation
                 }
                 .onEnded { _ in
-                    isDragging = false
+                    if isDragging {
+                        isDragging = false
+                        NSCursor.pop()
+                    }
                     previousTranslation = 0
                     onCommit()
                 }
         )
-        .animation(.easeInOut(duration: 0.15), value: isHovering)
-        .animation(.easeInOut(duration: 0.15), value: isDragging)
+        .animation(.easeInOut(duration: 0.12), value: isHovering)
+        .animation(.easeInOut(duration: 0.12), value: isDragging)
         .accessibilityLabel(resizeLabel)
         .accessibilityHint("Drag to resize")
         .help(resizeLabel)
@@ -183,6 +207,53 @@ private struct SplitResizeHandle: View {
         axis == .vertical
             ? L10n.string("Resize Columns")
             : L10n.string("Resize Rows")
+    }
+}
+
+// MARK: - Native AppKit Cursor Bridge
+
+private struct CursorRectView: NSViewRepresentable {
+    let cursor: NSCursor
+
+    func makeNSView(context: Context) -> CursorHostingNSView {
+        let view = CursorHostingNSView()
+        view.cursor = cursor
+        return view
+    }
+
+    func updateNSView(_ nsView: CursorHostingNSView, context: Context) {
+        nsView.cursor = cursor
+    }
+}
+
+private final class CursorHostingNSView: NSView {
+    var cursor: NSCursor = .arrow {
+        didSet {
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: cursor)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas {
+            removeTrackingArea(area)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.cursorUpdate, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        cursor.set()
     }
 }
 
