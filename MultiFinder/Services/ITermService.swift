@@ -54,10 +54,14 @@ final class TerminalService {
         applicationURL(for: selectedApplication) != nil
     }
 
-    func openDirectory(_ url: URL) throws {
-        let application = selectedApplication
-        guard let applicationURL = applicationURL(for: application) else {
-            throw TerminalServiceError.notInstalled(application.displayName)
+    var isITermAvailable: Bool {
+        applicationURL(for: .iTerm2) != nil
+    }
+
+    func openDirectory(_ url: URL, application: PreferredTerminalApplication? = nil) throws {
+        let targetApp = application ?? selectedApplication
+        guard let applicationURL = applicationURL(for: targetApp) else {
+            throw TerminalServiceError.notInstalled(targetApp.displayName)
         }
 
         let directoryURL = url.standardizedFileURL
@@ -72,7 +76,15 @@ final class TerminalService {
                 directoryURL: directoryURL
             ))
         } catch {
-            throw TerminalServiceError.launchFailed(application.displayName, error.localizedDescription)
+            throw TerminalServiceError.launchFailed(targetApp.displayName, error.localizedDescription)
+        }
+    }
+
+    func openInITermPreferred(_ url: URL) throws {
+        if isITermAvailable {
+            try openDirectory(url, application: .iTerm2)
+        } else {
+            try openDirectory(url)
         }
     }
 

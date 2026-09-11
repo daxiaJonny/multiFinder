@@ -20,17 +20,33 @@ struct PathBarView: View {
     @State private var dropTargetURL: URL?
     @FocusState private var isPathFieldFocused: Bool
     @ObservedObject private var gitPulseStore = GitPulseStore.shared
+    @State private var headerWidth: CGFloat = 400
 
     private var pathComponents: [(name: String, url: URL)] {
         guard case .directory(let url) = location else { return [] }
+        let standardized = url.standardizedFileURL
+        let homeURL = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
+
         var components: [(String, URL)] = []
-        var current = url.standardizedFileURL
-        while current.path != "/" {
-            components.insert((current.lastPathComponent, current), at: 0)
-            current = current.deletingLastPathComponent()
+        var current = standardized
+
+        if current.path == homeURL.path {
+            return [("~", homeURL)]
+        } else if current.path.hasPrefix(homeURL.path + "/") {
+            while current.path != homeURL.path && current.path != "/" {
+                components.insert((current.lastPathComponent, current), at: 0)
+                current = current.deletingLastPathComponent()
+            }
+            components.insert(("~", homeURL), at: 0)
+            return components
+        } else {
+            while current.path != "/" {
+                components.insert((current.lastPathComponent, current), at: 0)
+                current = current.deletingLastPathComponent()
+            }
+            components.insert(("/", URL(fileURLWithPath: "/")), at: 0)
+            return components
         }
-        components.insert(("/", URL(fileURLWithPath: "/")), at: 0)
-        return components
     }
 
     var body: some View {
@@ -46,6 +62,13 @@ struct PathBarView: View {
             }
         }
         .frame(height: 36)
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { headerWidth = geo.size.width }
+                    .onChange(of: geo.size.width) { newWidth in headerWidth = newWidth }
+            }
+        )
         .background(
             ZStack {
                 if isFocused {
@@ -70,75 +93,10 @@ struct PathBarView: View {
     // MARK: - Breadcrumb Header
 
     private var breadcrumbHeader: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 3) {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 3) {
-                        ForEach(Array(pathComponents.enumerated()), id: \.offset) { index, component in
-                            let isLast = index == pathComponents.count - 1
-                            Button(action: {
-                                onFocus()
-                                onNavigate(component.url)
-                            }) {
-                                if isLast {
-                                    HStack(spacing: 5) {
-                                        Image(systemName: "folder.fill")
-                                            .font(.system(size: 11))
-                                            .foregroundStyle(MFDTheme.primaryAccent)
-                                        Text(component.name)
-                                            .font(.system(size: 12, weight: .semibold))
-                                            .lineLimit(1)
-                                    }
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                            .fill(isFocused ? MFDTheme.primaryAccent.opacity(0.18) : Color.primary.opacity(0.06))
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                                    .stroke(isFocused ? MFDTheme.primaryAccent.opacity(0.35) : Color.clear, lineWidth: 1)
-                                            )
-                                    )
-                                    .foregroundStyle(isFocused ? MFDTheme.primaryAccent : .primary)
-                                } else {
-                                    HStack(spacing: 3) {
-                                        if index == 0 {
-                                            Image(systemName: "laptopcomputer")
-                                                .font(.system(size: 10))
-                                                .foregroundStyle(.secondary)
-                                        }
-                                        Text(component.name)
-                                            .font(.system(size: 11, weight: .regular))
-                                            .lineLimit(1)
-                                    }
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 3)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 4)
-                                            .fill(breadcrumbBackground(for: component.url, at: index))
-                                    )
-                                    .foregroundStyle(.secondary)
-                                }
-                            }
-                            .id(index)
-                            .buttonStyle(.plain)
-                            .onDrop(
-                                of: [UTType.fileURL],
-                                delegate: BreadcrumbDropDelegate(
-                                    destination: component.url,
-                                    targetedURL: $dropTargetURL,
-                                    onTransferDroppedItems: onTransferDroppedItems
-                                )
-                            )
-
-                            if index < pathComponents.count - 1 {
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 7, weight: .bold))
-                                    .foregroundStyle(.tertiary)
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 4)
+                    breadcrumbItemsView
                 }
                 .onAppear {
                     if viewModel.currentURL != nil && !pathComponents.isEmpty {
@@ -151,28 +109,219 @@ struct PathBarView: View {
                     }
                 }
             }
-            .frame(minWidth: 40, maxWidth: .infinity, alignment: .leading)
+            .frame(minWidth: 30, maxWidth: .infinity, alignment: .leading)
 
             if let currentURL = viewModel.currentURL,
                let gitStatus = gitPulseStore.status(for: currentURL) {
-                GitPulseBadgeView(status: gitStatus, onFocus: onFocus)
+                GitPulseBadgeView(status: gitStatus, isCompact: headerWidth < 340, onFocus: onFocus)
                     .fixedSize()
             }
 
-            Spacer(minLength: 4)
+            Spacer(minLength: 2)
 
             filterToggleButton
 
-            viewModePicker
+            adaptiveViewModePicker
 
             Rectangle()
                 .fill(MFDTheme.subtleHairline)
-                .frame(width: 1, height: 14)
+                .frame(width: 1, height: 12)
 
             controls(canEdit: true)
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 6)
         .onTapGesture(count: 2, perform: startEditing)
+    }
+
+    private var breadcrumbItemsView: some View {
+        HStack(spacing: 2) {
+            if headerWidth < 260 || pathComponents.count <= 1 {
+                // Ultra-narrow mode: show current folder
+                if let lastComponent = pathComponents.last {
+                    breadcrumbComponentView(component: lastComponent, index: pathComponents.count - 1, isLast: true)
+                }
+            } else if headerWidth < 360 {
+                // Narrow mode: show ~ > … > current (or ~ > current)
+                if pathComponents.count == 2 {
+                    breadcrumbComponentView(component: pathComponents[0], index: 0, isLast: false)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 6, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                    breadcrumbComponentView(component: pathComponents[1], index: 1, isLast: true)
+                } else if pathComponents.count > 2 {
+                    if let root = pathComponents.first {
+                        breadcrumbComponentView(component: root, index: 0, isLast: false)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 6, weight: .bold))
+                            .foregroundStyle(.tertiary)
+                    }
+
+                    let omitted = Array(pathComponents[1 ..< (pathComponents.count - 1)])
+                    omittedFoldersMenu(omitted: omitted)
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 6, weight: .bold))
+                        .foregroundStyle(.tertiary)
+
+                    if let last = pathComponents.last {
+                        breadcrumbComponentView(component: last, index: pathComponents.count - 1, isLast: true)
+                    }
+                }
+            } else {
+                // Regular mode (headerWidth >= 360)
+                if pathComponents.count <= 3 {
+                    ForEach(Array(pathComponents.enumerated()), id: \.offset) { index, component in
+                        let isLast = index == pathComponents.count - 1
+                        breadcrumbComponentView(component: component, index: index, isLast: isLast)
+
+                        if !isLast {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 6, weight: .bold))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                } else {
+                    // Root component (e.g. ~ or /)
+                    if let root = pathComponents.first {
+                        breadcrumbComponentView(component: root, index: 0, isLast: false)
+
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 6, weight: .bold))
+                            .foregroundStyle(.tertiary)
+                    }
+
+                    // Omitted intermediate folders menu
+                    let omitted = Array(pathComponents[1 ..< (pathComponents.count - 2)])
+                    if !omitted.isEmpty {
+                        omittedFoldersMenu(omitted: omitted)
+
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 6, weight: .bold))
+                            .foregroundStyle(.tertiary)
+                    }
+
+                    // Parent component
+                    let parentIndex = pathComponents.count - 2
+                    let parentComponent = pathComponents[parentIndex]
+                    breadcrumbComponentView(component: parentComponent, index: parentIndex, isLast: false)
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 6, weight: .bold))
+                        .foregroundStyle(.tertiary)
+
+                    // Current folder component
+                    let lastIndex = pathComponents.count - 1
+                    let lastComponent = pathComponents[lastIndex]
+                    breadcrumbComponentView(component: lastComponent, index: lastIndex, isLast: true)
+                }
+            }
+        }
+        .padding(.horizontal, 2)
+    }
+
+    private func omittedFoldersMenu(omitted: [(name: String, url: URL)]) -> some View {
+        Menu {
+            ForEach(omitted.reversed(), id: \.url) { item in
+                Button {
+                    onFocus()
+                    onNavigate(item.url)
+                } label: {
+                    Label(item.name, systemImage: "folder")
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Color.primary.opacity(0.05))
+                )
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help(L10n.string("Parent Folders"))
+    }
+
+    @ViewBuilder
+    private func breadcrumbComponentView(component: (name: String, url: URL), index: Int, isLast: Bool) -> some View {
+        Button(action: {
+            onFocus()
+            onNavigate(component.url)
+        }) {
+            if isLast {
+                HStack(spacing: 4) {
+                    Image(systemName: "folder.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(MFDTheme.primaryAccent)
+                    Text(component.name)
+                        .font(.system(size: 11, weight: .semibold))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: headerWidth < 300 ? 80 : 130)
+                }
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3.5)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(isFocused ? MFDTheme.primaryAccent.opacity(0.18) : Color.primary.opacity(0.06))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .stroke(isFocused ? MFDTheme.primaryAccent.opacity(0.35) : Color.clear, lineWidth: 1)
+                        )
+                )
+                .foregroundStyle(isFocused ? MFDTheme.primaryAccent : .primary)
+            } else if index == 0 {
+                HStack(spacing: 2) {
+                    if component.name == "~" {
+                        Image(systemName: "house.fill")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Image(systemName: "laptopcomputer")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(component.name)
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(breadcrumbBackground(for: component.url, at: index))
+                )
+                .foregroundStyle(.secondary)
+            } else {
+                Text(component.name)
+                    .font(.system(size: 11, weight: .regular))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: headerWidth < 340 ? 60 : 90)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 3)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(breadcrumbBackground(for: component.url, at: index))
+                    )
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .id(index)
+        .buttonStyle(.plain)
+        .onDrop(
+            of: [UTType.fileURL],
+            delegate: BreadcrumbDropDelegate(
+                destination: component.url,
+                targetedURL: $dropTargetURL,
+                onTransferDroppedItems: onTransferDroppedItems
+            )
+        )
     }
 
     // MARK: - Filter Header
@@ -220,40 +369,45 @@ struct PathBarView: View {
                     .font(.system(size: 11))
                     .focused($isFilterFocused)
                     .onSubmit {
-                        isFilterFocused = false
-                    }
-                    .onKeyPress(.escape) {
-                        viewModel.clearFilter()
-                        isFilterFocused = false
-                        return .handled
+                        // Keep filter active
                     }
 
-                if viewModel.isFiltering {
+                if !viewModel.filterText.isEmpty {
                     Button {
-                        viewModel.clearFilter()
+                        viewModel.filterText = ""
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 10))
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
-                    .help("Clear Filter")
                 }
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
             .background(
                 RoundedRectangle(cornerRadius: 5)
-                    .fill(Color(nsColor: .controlBackgroundColor))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 5)
-                            .stroke(MFDTheme.primaryAccent.opacity(0.5), lineWidth: 1)
-                    )
+                    .fill(Color(NSColor.controlBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(MFDTheme.primaryAccent.opacity(0.35), lineWidth: 1)
             )
 
             Spacer(minLength: 4)
 
-            viewModePicker
+            Button("Done") {
+                isFilterFocused = false
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 11))
+            .foregroundStyle(MFDTheme.primaryAccent)
+
+            adaptiveViewModePicker
+
+            Rectangle()
+                .fill(MFDTheme.subtleHairline)
+                .frame(width: 1, height: 12)
 
             controls(canEdit: false)
         }
@@ -276,7 +430,7 @@ struct PathBarView: View {
 
             filterToggleButton
 
-            viewModePicker
+            adaptiveViewModePicker
 
             controls(canEdit: false)
         }
@@ -315,6 +469,35 @@ struct PathBarView: View {
         .help("Filter files (/)")
     }
 
+    @ViewBuilder
+    private var adaptiveViewModePicker: some View {
+        if headerWidth < 380 {
+            Menu {
+                ForEach(BrowserViewMode.allCases, id: \.self) { mode in
+                    Button {
+                        viewModel.viewMode = mode
+                    } label: {
+                        Label(mode.localizedName, systemImage: mode.systemImage)
+                    }
+                }
+            } label: {
+                Image(systemName: viewModel.viewMode.systemImage)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22, height: 22)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.primary.opacity(0.04))
+                    )
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help(L10n.string("View Mode"))
+        } else {
+            viewModePicker
+        }
+    }
+
     private var viewModePicker: some View {
         Picker("View", selection: $viewModel.viewMode) {
             ForEach(BrowserViewMode.allCases, id: \.self) { mode in
@@ -340,7 +523,7 @@ struct PathBarView: View {
             .buttonStyle(.plain)
             .help("Refresh")
 
-            if canEdit {
+            if canEdit && headerWidth >= 320 {
                 Button(action: startEditing) {
                     Image(systemName: "pencil")
                         .font(.system(size: 10))

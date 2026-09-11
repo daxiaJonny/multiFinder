@@ -103,12 +103,12 @@ struct GitPulsePopoverView: View {
                 .help(L10n.string("Refresh Git Status"))
 
                 Button {
-                    try? TerminalService.shared.openDirectory(status.repoRootURL)
+                    try? TerminalService.shared.openInITermPreferred(status.repoRootURL)
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "terminal")
                             .font(.system(size: 10))
-                        Text(L10n.string("Open in Terminal"))
+                        Text(terminalButtonTitle)
                             .font(.system(size: 11))
                     }
                     .padding(.horizontal, 8)
@@ -119,7 +119,7 @@ struct GitPulsePopoverView: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .help(L10n.string("Open repository in Terminal"))
+                .help(terminalButtonHelp)
             }
         }
         .padding(12)
@@ -278,5 +278,19 @@ struct GitPulsePopoverView: View {
                 }
             }
         }
+    }
+
+    private var terminalButtonTitle: String {
+        if TerminalService.shared.isITermAvailable {
+            return L10n.string("Open in iTerm")
+        }
+        return L10n.string("Open in Terminal")
+    }
+
+    private var terminalButtonHelp: String {
+        if TerminalService.shared.isITermAvailable {
+            return L10n.string("Open repository in iTerm")
+        }
+        return L10n.string("Open repository in Terminal")
     }
 }

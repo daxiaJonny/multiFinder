@@ -3,6 +3,7 @@ import SwiftUI
 /// Compact Git branch capsule rendered in PathBarView breadcrumb bar.
 struct GitPulseBadgeView: View {
     let status: GitStatusInfo
+    var isCompact: Bool = false
     let onFocus: () -> Void
 
     @State private var isPopoverPresented = false
@@ -12,35 +13,37 @@ struct GitPulseBadgeView: View {
             onFocus()
             isPopoverPresented.toggle()
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: 3) {
                 Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(status.isClean ? .green : .orange)
 
                 Text(status.badgeTitle)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 10, weight: .semibold))
                     .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: isCompact ? 55 : 85, alignment: .leading)
 
                 if status.totalChanges > 0 {
                     HStack(spacing: 1) {
                         Text("*")
-                            .font(.system(size: 11, weight: .bold))
+                            .font(.system(size: 10, weight: .bold))
                             .foregroundStyle(.orange)
                         Text("\(status.totalChanges)")
-                            .font(.system(size: 10, weight: .medium))
+                            .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(.secondary)
                     }
                 }
 
                 if status.aheadCount > 0 {
                     Text("↑\(status.aheadCount)")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(MFDTheme.primaryAccent)
                 }
             }
             .fixedSize(horizontal: true, vertical: false)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2.5)
             .background(
                 Capsule()
                     .fill(Color.primary.opacity(0.06))

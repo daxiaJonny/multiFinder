@@ -223,6 +223,36 @@ final class ExternalIntegrationTests: XCTestCase {
         XCTAssertEqual(service.applicationName, "Warp")
     }
 
+    func testTerminalServiceOpenInITermPreferredLaunchesExpectedApplication() throws {
+        var launchedArgs: [String]?
+        let service = TerminalService(processRunner: { args in
+            launchedArgs = args
+        })
+
+        let tempDir = FileManager.default.temporaryDirectory
+        try service.openInITermPreferred(tempDir)
+        XCTAssertNotNil(launchedArgs)
+        if service.isITermAvailable {
+            XCTAssertTrue(launchedArgs?.contains(where: { $0.contains("iTerm") }) == true)
+        } else {
+            XCTAssertTrue(launchedArgs?.contains(where: { $0.contains("Terminal") }) == true)
+        }
+    }
+
+    func testTerminalServiceOpenDirectoryWithExplicitApplication() throws {
+        var launchedArgs: [String]?
+        let service = TerminalService(processRunner: { args in
+            launchedArgs = args
+        })
+
+        let tempDir = FileManager.default.temporaryDirectory
+        if service.applicationURL(for: .terminal) != nil {
+            try service.openDirectory(tempDir, application: .terminal)
+            XCTAssertNotNil(launchedArgs)
+            XCTAssertTrue(launchedArgs?.contains(where: { $0.contains("Terminal") }) == true)
+        }
+    }
+
     @MainActor
     private func waitUntil(
         timeout: TimeInterval = 3,

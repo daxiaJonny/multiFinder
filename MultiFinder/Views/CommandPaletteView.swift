@@ -609,16 +609,17 @@ struct CommandPaletteView: View {
                 }
             ))
 
+            let terminalName = TerminalService.shared.isITermAvailable ? "iTerm" : TerminalService.shared.applicationName
             items.append(CommandPaletteItem(
                 id: "git.openTerminal",
-                title: "Git: Open Repository in Terminal",
-                subtitle: "Launch terminal at \(gitStatus.repoRootURL.lastPathComponent)",
+                title: "Git: Open Repository in \(terminalName)",
+                subtitle: "Launch \(terminalName) at \(gitStatus.repoRootURL.lastPathComponent)",
                 category: .file,
                 iconName: "terminal",
                 iconColor: .green,
                 shortcut: nil,
                 action: {
-                    try? TerminalService.shared.openDirectory(gitStatus.repoRootURL)
+                    try? TerminalService.shared.openInITermPreferred(gitStatus.repoRootURL)
                 }
             ))
 
