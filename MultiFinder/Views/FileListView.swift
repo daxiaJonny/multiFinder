@@ -72,6 +72,13 @@ struct FileListView: View {
             }
         }
         .id(viewModel.tableRevision)
+        .overlay {
+            FileTableRangeSelectionMonitor(
+                itemIDs: viewModel.visibleItems.map(\.id),
+                selection: focusedSelection
+            )
+            .allowsHitTesting(false)
+        }
         .overlay(alignment: .topLeading) {
             FileTableClickMonitor(
                 items: viewModel.visibleItems,
@@ -417,6 +424,99 @@ struct FileListView: View {
     }
 }
 
+struct FileTableRangeSelectionMonitor: NSViewRepresentable {
+    let itemIDs: [FileItem.ID]
+    @Binding var selection: Set<FileItem.ID>
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = PassthroughView(frame: .zero)
+        context.coordinator.anchorView = view
+        context.coordinator.monitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .leftMouseUp]
+        ) { [weak coordinator = context.coordinator] event in
+            guard let coordinator else { return event }
+            return coordinator.handle(event)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.itemIDs = itemIDs
+        context.coordinator.selection = selection
+        context.coordinator.onSelection = { selection = $0 }
+        if selection.isEmpty {
+            context.coordinator.anchorID = nil
+        } else if let anchor = context.coordinator.anchorID, !itemIDs.contains(anchor) {
+            context.coordinator.anchorID = nil
+        }
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        if let monitor = coordinator.monitor { NSEvent.removeMonitor(monitor) }
+        coordinator.monitor = nil
+    }
+
+    final class PassthroughView: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
+    @MainActor
+    final class Coordinator {
+        weak var anchorView: NSView?
+        var monitor: Any?
+        var itemIDs: [FileItem.ID] = []
+        var selection: Set<FileItem.ID> = []
+        var onSelection: (Set<FileItem.ID>) -> Void = { _ in }
+        var anchorID: FileItem.ID?
+        private var consumesMouseUp = false
+
+        func handle(_ event: NSEvent) -> NSEvent? {
+            if event.type == .leftMouseUp, consumesMouseUp {
+                consumesMouseUp = false
+                return nil
+            }
+            guard event.type == .leftMouseDown else { return event }
+            consumesMouseUp = false
+            guard let anchorView, let window = anchorView.window,
+                  event.window === window,
+                  !anchorView.isHiddenOrHasHiddenAncestor,
+                  anchorView.visibleRect.contains(anchorView.convert(event.locationInWindow, from: nil)),
+                  !event.modifierFlags.contains(.control),
+                  let contentView = window.contentView else { return event }
+
+            var hitView = contentView.hitTest(contentView.convert(event.locationInWindow, from: nil))
+            // SwiftUI Table and List both host their rows inside an NSTableView.
+            while let view = hitView, !(view is NSTableView) { hitView = view.superview }
+            guard let tableView = hitView as? NSTableView else { return event }
+            let row = tableView.row(at: tableView.convert(event.locationInWindow, from: nil))
+            guard itemIDs.indices.contains(row) else { return event }
+
+            guard event.modifierFlags.contains(.shift) else {
+                anchorID = itemIDs[row]
+                return event
+            }
+
+            let anchor = anchorID.flatMap { itemIDs.firstIndex(of: $0) }
+                ?? itemIDs.firstIndex(where: selection.contains)
+                ?? row
+            anchorID = itemIDs[anchor]
+            let range = min(anchor, row)...max(anchor, row)
+            let rangeSelection = Set(itemIDs[range])
+            let nextSelection = event.modifierFlags.contains(.command)
+                ? selection.union(rangeSelection) : rangeSelection
+            let indexes = IndexSet(itemIDs.indices.filter { nextSelection.contains(itemIDs[$0]) })
+            tableView.selectRowIndexes(indexes, byExtendingSelection: false)
+            selection = nextSelection
+            onSelection(nextSelection)
+            // Prevent the native drag/click handling from replacing this explicit range.
+            consumesMouseUp = true
+            return nil
+        }
+    }
+}
+
 private final class FileTableRenameState: ObservableObject {
     @Published var itemID: FileItem.ID?
 }
@@ -609,6 +709,10 @@ private struct FileTableClickMonitor: NSViewRepresentable {
             }
 
             pendingEditTask?.cancel()
+            guard event.modifierFlags.intersection([.shift, .command, .control]).isEmpty else {
+                resetNameClickSequence()
+                return
+            }
             if event.clickCount > 1 {
                 resetNameClickSequence()
                 return
@@ -901,6 +1005,10 @@ enum FileDragProvider {
 
         let provider = NSItemProvider(contentsOf: firstURL)
             ?? NSItemProvider(object: firstURL as NSURL)
+        // Chromium-based apps (DingTalk mail) load the file UTI and name the
+        // temp file from suggestedName. NSItemProvider(contentsOf:) leaves it
+        // nil, so the receiver falls back to the UTI description.
+        provider.suggestedName = firstURL.lastPathComponent
         guard normalizedURLs.count > 1,
               let batchData = DroppedFileURL.batchData(for: normalizedURLs) else {
             return provider

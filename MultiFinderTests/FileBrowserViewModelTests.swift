@@ -1,7 +1,171 @@
+import AppKit
 import Combine
 import Foundation
+import SwiftUI
 import XCTest
 @testable import MultiFinder
+
+@MainActor
+final class FileTableRangeSelectionTests: XCTestCase, NSTableViewDataSource {
+    private struct Row: Identifiable {
+        let id: URL
+    }
+
+    private final class SelectionFixture: ObservableObject {
+        let rows = (0..<8).map { Row(id: URL(fileURLWithPath: "/selection-test/\($0)")) }
+        @Published var selection: Set<URL> = []
+    }
+
+    private struct HostedRows: View {
+        @ObservedObject var fixture: SelectionFixture
+        let isColumn: Bool
+
+        var body: some View {
+            Group {
+                if isColumn {
+                    List(selection: $fixture.selection) {
+                        ForEach(fixture.rows) { row in
+                            Text(row.id.lastPathComponent)
+                                .tag(row.id)
+                                .onDrag { NSItemProvider(object: row.id as NSURL) }
+                        }
+                    }
+                } else {
+                    Table(of: Row.self, selection: $fixture.selection) {
+                        TableColumn("Name") { row in Text(row.id.lastPathComponent) }
+                    } rows: {
+                        ForEach(fixture.rows) { row in
+                            TableRow(row).itemProvider { NSItemProvider(object: row.id as NSURL) }
+                        }
+                    }
+                }
+            }
+            .overlay {
+                FileTableRangeSelectionMonitor(itemIDs: fixture.rows.map(\.id), selection: $fixture.selection)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    func testHostedSwiftUITableRoutesShiftClicksThroughMonitor() async throws {
+        try await verifyHostedRange(isColumn: false)
+    }
+
+    func testHostedSwiftUIListRoutesShiftClicksThroughMonitor() async throws {
+        try await verifyHostedRange(isColumn: true)
+    }
+
+    private func verifyHostedRange(isColumn: Bool) async throws {
+        let fixture = SelectionFixture()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 440),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = NSHostingView(rootView: HostedRows(fixture: fixture, isColumn: isColumn))
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(150))
+        func findTable(_ view: NSView) -> NSTableView? {
+            if let table = view as? NSTableView { return table }
+            return view.subviews.lazy.compactMap(findTable).first
+        }
+        let table = try XCTUnwrap(findTable(window.contentView!))
+        XCTAssertEqual(table.numberOfRows, 8)
+        for row in [6, 0] {
+            let down = click(row, in: table, flags: .shift)
+            let up = try XCTUnwrap(NSEvent.mouseEvent(
+                with: .leftMouseUp, location: down.locationInWindow,
+                modifierFlags: .shift, timestamp: down.timestamp + 0.1,
+                windowNumber: window.windowNumber, context: nil,
+                eventNumber: 1, clickCount: 1, pressure: 0
+            ))
+            NSApp.postEvent(up, atStart: true)
+            NSApp.sendEvent(down)
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertEqual(fixture.selection, Set(fixture.rows[0...6].map(\.id)))
+        XCTAssertEqual(table.selectedRowIndexes, IndexSet(integersIn: 0...6))
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { 8 }
+
+    private func withTable(
+        _ body: (FileTableRangeSelectionMonitor.Coordinator, NSTableView, NSWindow) throws -> Void
+    ) rethrows {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 260),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let scroll = NSScrollView(frame: window.contentView!.bounds)
+        let table = NSTableView(frame: scroll.bounds)
+        table.headerView = nil
+        table.rowHeight = 24
+        table.allowsMultipleSelection = true
+        table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("Name")))
+        table.dataSource = self
+        scroll.documentView = table
+        window.contentView!.addSubview(scroll)
+        table.reloadData()
+        window.contentView!.layoutSubtreeIfNeeded()
+        let coordinator = FileTableRangeSelectionMonitor.Coordinator()
+        coordinator.anchorView = scroll
+        coordinator.itemIDs = (0..<8).map { URL(fileURLWithPath: "/selection-test/\($0)") }
+        try body(coordinator, table, window)
+    }
+
+    private func click(_ row: Int, in table: NSTableView, flags: NSEvent.ModifierFlags = []) -> NSEvent {
+        let rect = table.rect(ofRow: row)
+        return NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: table.convert(NSPoint(x: 30, y: rect.midY), to: nil),
+            modifierFlags: flags, timestamp: 1, windowNumber: table.window!.windowNumber,
+            context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+        )!
+    }
+
+    func testBottomToTopShiftClickSelectsEveryRowAndConsumesEvent() {
+        withTable { coordinator, table, _ in
+            XCTAssertNotNil(coordinator.handle(click(6, in: table)))
+            coordinator.selection = [coordinator.itemIDs[6]]
+            var published: Set<URL> = []
+            coordinator.onSelection = { published = $0 }
+            XCTAssertNil(coordinator.handle(click(0, in: table, flags: .shift)))
+            XCTAssertEqual(published, Set(coordinator.itemIDs[0...6]))
+            XCTAssertEqual(table.selectedRowIndexes, IndexSet(integersIn: 0...6))
+        }
+    }
+
+    func testShiftRangeKeepsOriginalAnchorWhenShrinking() {
+        withTable { coordinator, table, _ in
+            _ = coordinator.handle(click(1, in: table))
+            coordinator.selection = [coordinator.itemIDs[1]]
+            XCTAssertNil(coordinator.handle(click(7, in: table, flags: .shift)))
+            XCTAssertNil(coordinator.handle(click(3, in: table, flags: .shift)))
+            XCTAssertEqual(coordinator.selection, Set(coordinator.itemIDs[1...3]))
+        }
+    }
+
+    func testTwoShiftClicksWithoutPriorSelectionSetThenExtendAnchor() {
+        withTable { coordinator, table, _ in
+            XCTAssertNil(coordinator.handle(click(7, in: table, flags: .shift)))
+            XCTAssertEqual(coordinator.selection, [coordinator.itemIDs[7]])
+            XCTAssertNil(coordinator.handle(click(0, in: table, flags: .shift)))
+            XCTAssertEqual(coordinator.selection, Set(coordinator.itemIDs))
+        }
+    }
+
+    func testCommandShiftPreservesOtherSelectedRows() {
+        withTable { coordinator, table, _ in
+            _ = coordinator.handle(click(4, in: table, flags: .command))
+            coordinator.selection = [coordinator.itemIDs[0], coordinator.itemIDs[4]]
+            XCTAssertNil(coordinator.handle(click(6, in: table, flags: [.command, .shift])))
+            XCTAssertEqual(table.selectedRowIndexes, IndexSet([0, 4, 5, 6]))
+        }
+    }
+}
 
 final class FileBrowserViewModelTests: XCTestCase {
     private struct StubQuestionAnswerer: AIQuestionAnswering {

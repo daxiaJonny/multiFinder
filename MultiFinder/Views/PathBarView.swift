@@ -21,6 +21,8 @@ struct PathBarView: View {
     @FocusState private var isPathFieldFocused: Bool
     @ObservedObject private var gitPulseStore = GitPulseStore.shared
     @State private var headerWidth: CGFloat = 400
+    @State private var isFilterHovering = false
+    @State private var isViewModeMenuHovering = false
 
     private var pathComponents: [(name: String, url: URL)] {
         guard case .directory(let url) = location else { return [] }
@@ -93,7 +95,7 @@ struct PathBarView: View {
     // MARK: - Breadcrumb Header
 
     private var breadcrumbHeader: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: 4) {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
                     breadcrumbItemsView
@@ -110,6 +112,8 @@ struct PathBarView: View {
                 }
             }
             .frame(minWidth: 30, maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2, perform: startEditing)
 
             if let currentURL = viewModel.currentURL,
                let gitStatus = gitPulseStore.status(for: currentURL) {
@@ -118,6 +122,8 @@ struct PathBarView: View {
             }
 
             Spacer(minLength: 2)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2, perform: startEditing)
 
             filterToggleButton
 
@@ -125,12 +131,12 @@ struct PathBarView: View {
 
             Rectangle()
                 .fill(MFDTheme.subtleHairline)
-                .frame(width: 1, height: 12)
+                .frame(width: 1, height: 14)
+                .padding(.horizontal, 2)
 
             controls(canEdit: true)
         }
-        .padding(.horizontal, 6)
-        .onTapGesture(count: 2, perform: startEditing)
+        .padding(.horizontal, 8)
     }
 
     private var breadcrumbItemsView: some View {
@@ -377,10 +383,12 @@ struct PathBarView: View {
                         viewModel.filterText = ""
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 10))
+                            .font(.system(size: 11))
                             .foregroundStyle(.secondary)
+                            .frame(width: 20, height: 20)
+                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PathBarIconButtonStyle())
                 }
             }
             .padding(.horizontal, 6)
@@ -399,19 +407,27 @@ struct PathBarView: View {
             Button("Done") {
                 isFilterFocused = false
             }
-            .buttonStyle(.plain)
-            .font(.system(size: 11))
+            .buttonStyle(PathBarIconButtonStyle())
+            .font(.system(size: 11, weight: .medium))
             .foregroundStyle(MFDTheme.primaryAccent)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3.5)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(MFDTheme.hoverPillBackground)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
 
             adaptiveViewModePicker
 
             Rectangle()
                 .fill(MFDTheme.subtleHairline)
-                .frame(width: 1, height: 12)
+                .frame(width: 1, height: 14)
+                .padding(.horizontal, 2)
 
             controls(canEdit: false)
         }
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 8)
     }
 
     // MARK: - Special Location Header
@@ -432,6 +448,11 @@ struct PathBarView: View {
 
             adaptiveViewModePicker
 
+            Rectangle()
+                .fill(MFDTheme.subtleHairline)
+                .frame(width: 1, height: 14)
+                .padding(.horizontal, 2)
+
             controls(canEdit: false)
         }
         .padding(.horizontal, 8)
@@ -446,27 +467,42 @@ struct PathBarView: View {
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.system(size: 11, weight: .medium))
                 if viewModel.isFiltering {
                     Text(viewModel.filterText)
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: 11, weight: .medium))
                         .lineLimit(1)
                 }
             }
-            .padding(.horizontal, 7)
-            .padding(.vertical, 4)
+            .frame(height: 26)
+            .padding(.horizontal, viewModel.isFiltering ? 8 : 6)
             .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(viewModel.isFiltering ? MFDTheme.primaryAccent.opacity(0.18) : MFDTheme.breadcrumbPillBackground)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(
+                        viewModel.isFiltering
+                            ? MFDTheme.primaryAccent.opacity(0.18)
+                            : (isFilterHovering ? MFDTheme.hoverPillBackground : MFDTheme.breadcrumbPillBackground)
+                    )
                     .overlay(
-                        RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .stroke(viewModel.isFiltering ? MFDTheme.primaryAccent.opacity(0.5) : Color.primary.opacity(0.06), lineWidth: 0.8)
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(
+                                viewModel.isFiltering
+                                    ? MFDTheme.primaryAccent.opacity(0.5)
+                                    : Color.primary.opacity(0.06),
+                                lineWidth: 0.8
+                            )
                     )
             )
-            .foregroundStyle(viewModel.isFiltering ? MFDTheme.primaryAccent : .secondary)
+            .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .foregroundStyle(
+                viewModel.isFiltering
+                    ? MFDTheme.primaryAccent
+                    : (isFilterHovering ? .primary : .secondary)
+            )
         }
-        .buttonStyle(.plain)
-        .help("Filter files (/)")
+        .buttonStyle(PathBarIconButtonStyle())
+        .onHover { isFilterHovering = $0 }
+        .help(L10n.string("Filter files (/)"))
     }
 
     @ViewBuilder
@@ -483,15 +519,17 @@ struct PathBarView: View {
             } label: {
                 Image(systemName: viewModel.viewMode.systemImage)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 22, height: 22)
+                    .foregroundStyle(isViewModeMenuHovering ? .primary : .secondary)
+                    .frame(width: 26, height: 26)
                     .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(Color.primary.opacity(0.04))
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(isViewModeMenuHovering ? MFDTheme.hoverPillBackground : Color.primary.opacity(0.04))
                     )
+                    .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+            .onHover { isViewModeMenuHovering = $0 }
             .help(L10n.string("View Mode"))
         } else {
             viewModePicker
@@ -514,38 +552,36 @@ struct PathBarView: View {
     }
 
     private func controls(canEdit: Bool) -> some View {
-        HStack(spacing: 2) {
-            Button(action: onRefresh) {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 10))
-                    .frame(width: 20, height: 20)
-            }
-            .buttonStyle(.plain)
-            .help("Refresh")
+        HStack(spacing: 3) {
+            PathBarIconButton(
+                icon: "arrow.clockwise",
+                iconSize: 11,
+                weight: .medium,
+                helpText: L10n.string("Refresh"),
+                action: onRefresh
+            )
 
             if canEdit && headerWidth >= 320 {
-                Button(action: startEditing) {
-                    Image(systemName: "pencil")
-                        .font(.system(size: 10))
-                        .frame(width: 20, height: 20)
-                }
-                .buttonStyle(.plain)
-                .help("Edit Path")
+                PathBarIconButton(
+                    icon: "pencil",
+                    iconSize: 11,
+                    weight: .medium,
+                    helpText: L10n.string("Edit Path"),
+                    action: startEditing
+                )
             }
 
             if canRemovePane {
-                Button(action: onRemovePane) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 8, weight: .bold))
-                        .frame(width: 20, height: 20)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Remove Pane")
-                .help("Remove Pane")
+                PathBarIconButton(
+                    icon: "xmark",
+                    iconSize: 9.5,
+                    weight: .bold,
+                    helpText: L10n.string("Remove Pane"),
+                    isDestructive: true,
+                    action: onRemovePane
+                )
             }
         }
-        .foregroundStyle(.secondary)
     }
 
     private var editField: some View {
@@ -569,16 +605,22 @@ struct PathBarView: View {
 
             Button(action: commitPath) {
                 Image(systemName: "arrow.right.circle.fill")
+                    .font(.system(size: 14))
                     .foregroundStyle(MFDTheme.primaryAccent)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PathBarIconButtonStyle())
             .help("Open Path")
 
             Button(action: { isEditing = false }) {
                 Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 14))
                     .foregroundStyle(.secondary)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PathBarIconButtonStyle())
             .help("Cancel Editing")
         }
         .padding(.horizontal, 8)
@@ -666,5 +708,50 @@ private struct BreadcrumbDropDelegate: DropDelegate {
 
     private var currentOperation: FileDropOperation {
         FileDropModifierKeys.currentOperation
+    }
+}
+
+private struct PathBarIconButton: View {
+    let icon: String
+    var iconSize: CGFloat = 11
+    var weight: Font.Weight = .medium
+    let helpText: String
+    var isDestructive: Bool = false
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: iconSize, weight: weight))
+                .foregroundStyle(
+                    isHovering
+                        ? (isDestructive ? Color.red : Color.primary)
+                        : Color.secondary
+                )
+                .frame(width: 26, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(
+                            isHovering
+                                ? (isDestructive ? Color.red.opacity(0.12) : MFDTheme.hoverPillBackground)
+                                : Color.clear
+                        )
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(PathBarIconButtonStyle())
+        .onHover { isHovering = $0 }
+        .help(helpText)
+    }
+}
+
+private struct PathBarIconButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.92 : 1.0)
+            .opacity(configuration.isPressed ? 0.75 : 1.0)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
     }
 }

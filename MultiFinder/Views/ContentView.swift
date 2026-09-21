@@ -453,6 +453,18 @@ private struct BrowserToolbar: ToolbarContent {
     let onApplyTemplate: (WorkspaceTemplate) -> Void
     let onDeleteTemplate: (WorkspaceTemplate) -> Void
 
+    @State private var isToolsPopoverPresented = false
+
+    private var pinnedTools: [ToolbarToolID] {
+        ToolbarToolID.allCases
+            .filter { appSettings.isToolPinned($0) }
+            .sorted { lhs, rhs in
+                let indexL = appSettings.pinnedToolbarToolIDs.firstIndex(of: lhs.rawValue) ?? lhs.defaultOrder
+                let indexR = appSettings.pinnedToolbarToolIDs.firstIndex(of: rhs.rawValue) ?? rhs.defaultOrder
+                return indexL < indexR
+            }
+    }
+
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
             Button(action: layoutManager.toggleSidebar) {
@@ -481,242 +493,352 @@ private struct BrowserToolbar: ToolbarContent {
         }
 
         ToolbarItemGroup(placement: .automatic) {
-            Button(action: toggleFavorite) {
-                Image(systemName: isCurrentFolderFavorite ? "star.fill" : "star")
+            ForEach(pinnedTools) { tool in
+                pinnedToolView(for: tool)
             }
-            .disabled(pane.currentURL == nil)
-            .help(
-                isCurrentFolderFavorite
-                    ? L10n.string("Remove from Favorites")
-                    : L10n.string("Add to Favorites")
-            )
 
-            Button(action: pane.presentSearch) {
-                Image(systemName: "magnifyingglass")
-                    .accessibilityLabel("Search")
+            Button {
+                isToolsPopoverPresented.toggle()
+            } label: {
+                Image(systemName: "puzzlepiece.extension")
+                    .font(.system(size: 11, weight: .medium))
             }
-            .help("Search")
-
-            Button(action: layoutManager.toggleCommandPalette) {
-                HStack(spacing: 3) {
-                    Image(systemName: "command")
-                        .font(.system(size: 10, weight: .semibold))
-                    Text("K")
-                        .font(.system(size: 11, weight: .semibold))
-                }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .background(
-                    Capsule()
-                        .fill(layoutManager.isCommandPalettePresented ? MFDTheme.primaryAccent.opacity(0.18) : Color.primary.opacity(0.06))
-                        .overlay(
-                            Capsule()
-                                .stroke(layoutManager.isCommandPalettePresented ? MFDTheme.primaryAccent.opacity(0.5) : MFDTheme.subtleHairline, lineWidth: 0.8)
-                        )
+            .popover(isPresented: $isToolsPopoverPresented, arrowEdge: .bottom) {
+                ToolbarToolsPopoverView(
+                    layoutManager: layoutManager,
+                    pane: pane,
+                    appSettings: appSettings,
+                    stashStore: stashStore,
+                    clipboard: clipboard,
+                    operationService: operationService,
+                    favoritesStore: favoritesStore,
+                    templateStore: templateStore,
+                    terminalService: terminalService,
+                    activeTemplateID: activeTemplateID,
+                    onSaveTemplate: onSaveTemplate,
+                    onSaveTemplateAs: onSaveTemplateAs,
+                    onApplyTemplate: onApplyTemplate,
+                    onDeleteTemplate: onDeleteTemplate,
+                    onDismiss: { isToolsPopoverPresented = false }
                 )
-                .foregroundStyle(layoutManager.isCommandPalettePresented ? MFDTheme.primaryAccent : .secondary)
             }
-            .buttonStyle(.plain)
-            .help("Command Palette (⌘K)")
+            .help(L10n.string("Toolbar Tools"))
+        }
+    }
 
-            Button(action: stashStore.togglePresented) {
-                HStack(spacing: 3) {
-                    Image(systemName: "tray.2.fill")
-                        .font(.system(size: 10, weight: .semibold))
-                    if stashStore.count > 0 {
-                        Text("\(stashStore.count)")
-                            .font(.system(size: 10, weight: .bold))
+    @ViewBuilder
+    private func pinnedToolView(for tool: ToolbarToolID) -> some View {
+        switch tool {
+        case .commandPalette:
+            commandPaletteButton
+                .contextMenu { unpinButton(for: tool) }
+        case .stashShelf:
+            stashShelfButton
+                .contextMenu { unpinButton(for: tool) }
+        case .aiAssistant:
+            aiAssistantButton
+                .contextMenu { unpinButton(for: tool) }
+        case .aiOrganize:
+            aiOrganizeButton
+                .contextMenu { unpinButton(for: tool) }
+        case .search:
+            searchButton
+                .contextMenu { unpinButton(for: tool) }
+        case .favorite:
+            favoriteButton
+                .contextMenu { unpinButton(for: tool) }
+        case .newFolder:
+            newFolderButton
+                .contextMenu { unpinButton(for: tool) }
+        case .hiddenFiles:
+            hiddenFilesButton
+                .contextMenu { unpinButton(for: tool) }
+        case .terminal:
+            terminalButton
+                .contextMenu { unpinButton(for: tool) }
+        case .paste:
+            pasteButton
+                .contextMenu { unpinButton(for: tool) }
+        case .operationHistory:
+            historyMenu
+                .contextMenu { unpinButton(for: tool) }
+        case .workspaceTemplates:
+            templatesMenu
+                .contextMenu { unpinButton(for: tool) }
+        case .arrangePanes:
+            arrangePanesMenu
+                .contextMenu { unpinButton(for: tool) }
+        }
+    }
+
+    private func unpinButton(for tool: ToolbarToolID) -> some View {
+        Button(role: .destructive) {
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                appSettings.unpinTool(tool)
+            }
+        } label: {
+            Label("从工具栏取消固定", systemImage: "pin.slash")
+        }
+    }
+
+    private var commandPaletteButton: some View {
+        Button(action: layoutManager.toggleCommandPalette) {
+            HStack(spacing: 3) {
+                Image(systemName: "command")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("K")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(
+                Capsule()
+                    .fill(layoutManager.isCommandPalettePresented ? MFDTheme.primaryAccent.opacity(0.18) : Color.primary.opacity(0.06))
+                    .overlay(
+                        Capsule()
+                            .stroke(layoutManager.isCommandPalettePresented ? MFDTheme.primaryAccent.opacity(0.5) : MFDTheme.subtleHairline, lineWidth: 0.8)
+                    )
+            )
+            .foregroundStyle(layoutManager.isCommandPalettePresented ? MFDTheme.primaryAccent : .secondary)
+        }
+        .buttonStyle(.plain)
+        .help("Command Palette (⌘K)")
+    }
+
+    private var stashShelfButton: some View {
+        Button(action: stashStore.togglePresented) {
+            HStack(spacing: 3) {
+                Image(systemName: "tray.2.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                if stashStore.count > 0 {
+                    Text("\(stashStore.count)")
+                        .font(.system(size: 10, weight: .bold))
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(
+                Capsule()
+                    .fill(stashStore.isPresented ? MFDTheme.primaryAccent.opacity(0.18) : Color.primary.opacity(0.06))
+                    .overlay(
+                        Capsule()
+                            .stroke(stashStore.isPresented ? MFDTheme.primaryAccent.opacity(0.5) : MFDTheme.subtleHairline, lineWidth: 0.8)
+                    )
+            )
+            .foregroundStyle(stashStore.isPresented ? MFDTheme.primaryAccent : .secondary)
+        }
+        .buttonStyle(.plain)
+        .help("Stash Shelf (⌘B)")
+    }
+
+    private var aiAssistantButton: some View {
+        Button(action: pane.toggleAIAssistant) {
+            Image(systemName: "sparkles")
+                .accessibilityLabel("Ask About Current Folder")
+        }
+        .disabled(pane.currentURL == nil || !pane.isAIAssistantAvailable)
+        .help(
+            pane.isAIAssistantAvailable
+                ? L10n.string("Ask About Current Folder")
+                : L10n.string("Cursor CLI Not Installed")
+        )
+    }
+
+    private var aiOrganizeButton: some View {
+        Button(action: pane.presentAIOrganize) {
+            Image(systemName: "wand.and.stars")
+                .accessibilityLabel("AI Organize")
+        }
+        .disabled(pane.currentURL == nil || !pane.isAIAssistantAvailable)
+        .help(
+            pane.isAIAssistantAvailable
+                ? L10n.string("AI Organize")
+                : L10n.string("Cursor CLI Not Installed")
+        )
+    }
+
+    private var searchButton: some View {
+        Button(action: pane.presentSearch) {
+            Image(systemName: "magnifyingglass")
+                .accessibilityLabel("Search")
+        }
+        .help("Search")
+    }
+
+    private var favoriteButton: some View {
+        Button(action: toggleFavorite) {
+            Image(systemName: isCurrentFolderFavorite ? "star.fill" : "star")
+        }
+        .disabled(pane.currentURL == nil)
+        .help(
+            isCurrentFolderFavorite
+                ? L10n.string("Remove from Favorites")
+                : L10n.string("Add to Favorites")
+        )
+    }
+
+    private var newFolderButton: some View {
+        Button(action: pane.newFolder) {
+            Image(systemName: "folder.badge.plus")
+        }
+        .disabled(!pane.canCreateItems)
+        .help("New Folder")
+    }
+
+    private var hiddenFilesButton: some View {
+        Button(action: pane.toggleHiddenFiles) {
+            Image(systemName: pane.showHiddenFiles ? "eye" : "eye.slash")
+        }
+        .help("Toggle Hidden Files")
+    }
+
+    private var terminalButton: some View {
+        Button(action: openInTerminal) {
+            Image(systemName: "terminal")
+        }
+        .disabled(pane.currentURL == nil || !terminalService.isAvailable)
+        .help(
+            terminalService.isAvailable
+                ? L10n.format("Open in %@", terminalApplicationName)
+                : L10n.format("%@ is not installed.", terminalApplicationName)
+        )
+    }
+
+    private var pasteButton: some View {
+        Button(action: paste) {
+            Image(systemName: "doc.on.clipboard")
+        }
+        .disabled(!clipboard.hasContent || !pane.canCreateItems)
+        .help("Paste")
+    }
+
+    private var historyMenu: some View {
+        Menu {
+            if operationService.history.isEmpty {
+                Text("No Operations")
+            } else {
+                ForEach(operationService.history.prefix(12)) { record in
+                    if record.status == .failed {
+                        Button(L10n.format("Retry %@", record.kind.localizedName)) {
+                            operationService.retry(record.id)
+                        }
+                    } else {
+                        Text(L10n.format(
+                            "%@ · %@",
+                            record.kind.localizedName,
+                            record.status.localizedName
+                        ))
                     }
                 }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .background(
-                    Capsule()
-                        .fill(stashStore.isPresented ? MFDTheme.primaryAccent.opacity(0.18) : Color.primary.opacity(0.06))
-                        .overlay(
-                            Capsule()
-                                .stroke(stashStore.isPresented ? MFDTheme.primaryAccent.opacity(0.5) : MFDTheme.subtleHairline, lineWidth: 0.8)
-                        )
-                )
-                .foregroundStyle(stashStore.isPresented ? MFDTheme.primaryAccent : .secondary)
             }
-            .buttonStyle(.plain)
-            .help("Stash Shelf (⌘B)")
-
-            Button(action: pane.toggleAIAssistant) {
-                Image(systemName: "sparkles")
-                    .accessibilityLabel("Ask About Current Folder")
-            }
-            .disabled(pane.currentURL == nil || !pane.isAIAssistantAvailable)
-            .help(
-                pane.isAIAssistantAvailable
-                    ? L10n.string("Ask About Current Folder")
-                    : L10n.string("Cursor CLI Not Installed")
-            )
-
-            Button(action: pane.presentAIOrganize) {
-                Image(systemName: "wand.and.stars")
-                    .accessibilityLabel("AI Organize")
-            }
-            .disabled(pane.currentURL == nil || !pane.isAIAssistantAvailable)
-            .help(
-                pane.isAIAssistantAvailable
-                    ? L10n.string("AI Organize")
-                    : L10n.string("Cursor CLI Not Installed")
-            )
-
-            Button(action: pane.newFolder) {
-                Image(systemName: "folder.badge.plus")
-            }
-            .disabled(!pane.canCreateItems)
-            .help("New Folder")
-
-            Button(action: pane.toggleHiddenFiles) {
-                Image(systemName: pane.showHiddenFiles ? "eye" : "eye.slash")
-            }
-            .help("Toggle Hidden Files")
-
-            Button(action: openInTerminal) {
-                Image(systemName: "terminal")
-            }
-            .disabled(pane.currentURL == nil || !terminalService.isAvailable)
-            .help(
-                terminalService.isAvailable
-                    ? L10n.format("Open in %@", terminalApplicationName)
-                    : L10n.format("%@ is not installed.", terminalApplicationName)
-            )
-
-            Button(action: paste) {
-                Image(systemName: "doc.on.clipboard")
-            }
-            .disabled(!clipboard.hasContent || !pane.canCreateItems)
-            .help("Paste")
+        } label: {
+            Image(systemName: "clock.arrow.circlepath")
         }
+        .help("Operation History")
+    }
 
-        ToolbarItemGroup(placement: .automatic) {
-            Menu {
-                if operationService.history.isEmpty {
-                    Text("No Operations")
-                } else {
-                    ForEach(operationService.history.prefix(12)) { record in
-                        if record.status == .failed {
-                            Button(L10n.format("Retry %@", record.kind.localizedName)) {
-                                operationService.retry(record.id)
-                            }
+    private var templatesMenu: some View {
+        Menu {
+            Button(saveTemplateTitle, action: onSaveTemplate)
+            Button("Save As…", action: onSaveTemplateAs)
+
+            if templateStore.templates.isEmpty {
+                Divider()
+                Text("No Saved Templates")
+            } else {
+                Divider()
+                ForEach(templateStore.templates) { template in
+                    Button {
+                        onApplyTemplate(template)
+                    } label: {
+                        if template.id == activeTemplateID {
+                            Label(template.name, systemImage: "checkmark")
                         } else {
-                            Text(L10n.format(
-                                "%@ · %@",
-                                record.kind.localizedName,
-                                record.status.localizedName
-                            ))
+                            Text(template.name)
                         }
                     }
                 }
-            } label: {
-                Image(systemName: "clock.arrow.circlepath")
-            }
-            .help("Operation History")
-
-            Menu {
-                Button(saveTemplateTitle, action: onSaveTemplate)
-                Button("Save As…", action: onSaveTemplateAs)
-
-                if templateStore.templates.isEmpty {
-                    Divider()
-                    Text("No Saved Templates")
-                } else {
-                    Divider()
+                Divider()
+                Menu("Delete Template") {
                     ForEach(templateStore.templates) { template in
-                        Button {
-                            onApplyTemplate(template)
-                        } label: {
-                            if template.id == activeTemplateID {
-                                Label(template.name, systemImage: "checkmark")
-                            } else {
-                                Text(template.name)
-                            }
-                        }
-                    }
-                    Divider()
-                    Menu("Delete Template") {
-                        ForEach(templateStore.templates) { template in
-                            Button(template.name, role: .destructive) {
-                                onDeleteTemplate(template)
-                            }
+                        Button(template.name, role: .destructive) {
+                            onDeleteTemplate(template)
                         }
                     }
                 }
-            } label: {
-                Image(systemName: "square.grid.2x2")
             }
-            .help("Workspace Templates")
-
-            Menu {
-                Button {
-                    guard let id = layoutManager.focusedPaneID else { return }
-                    layoutManager.newTab(in: id)
-                } label: {
-                    Image(systemName: "plus.rectangle.on.rectangle")
-                        .accessibilityLabel("New Tab")
-                }
-                .help("New Tab")
-
-                Divider()
-
-                Button {
-                    guard let id = layoutManager.focusedPaneID else { return }
-                    layoutManager.addPaneRight(of: id)
-                } label: {
-                    Image(systemName: "rectangle.righthalf.inset.filled")
-                        .accessibilityLabel("Split Right")
-                }
-                .help("Split Right")
-
-                Button {
-                    guard let id = layoutManager.focusedPaneID else { return }
-                    layoutManager.addPaneLeft(of: id)
-                } label: {
-                    Image(systemName: "rectangle.lefthalf.inset.filled")
-                        .accessibilityLabel("Split Left")
-                }
-                .help("Split Left")
-
-                Divider()
-
-                Button {
-                    guard let id = layoutManager.focusedPaneID else { return }
-                    layoutManager.addRowBelow(of: id)
-                } label: {
-                    Image(systemName: "rectangle.bottomhalf.inset.filled")
-                        .accessibilityLabel("Add Row Below")
-                }
-                .help("Add Row Below")
-
-                Button {
-                    guard let id = layoutManager.focusedPaneID else { return }
-                    layoutManager.addRowAbove(of: id)
-                } label: {
-                    Image(systemName: "rectangle.tophalf.inset.filled")
-                        .accessibilityLabel("Add Row Above")
-                }
-                .help("Add Row Above")
-
-                Divider()
-
-                Button(role: .destructive) {
-                    guard let id = layoutManager.focusedPaneID else { return }
-                    layoutManager.removePane(id)
-                } label: {
-                    Image(systemName: "rectangle.badge.minus")
-                        .accessibilityLabel("Remove Pane")
-                }
-                .disabled(layoutManager.totalPaneCount <= 1)
-                .help("Remove Pane")
-            } label: {
-                Image(systemName: "plus.square.on.square")
-            }
-            .help("Arrange Panes")
+        } label: {
+            Image(systemName: "square.grid.2x2")
         }
+        .help("Workspace Templates")
+    }
+
+    private var arrangePanesMenu: some View {
+        Menu {
+            Button {
+                guard let id = layoutManager.focusedPaneID else { return }
+                layoutManager.newTab(in: id)
+            } label: {
+                Image(systemName: "plus.rectangle.on.rectangle")
+                    .accessibilityLabel("New Tab")
+            }
+            .help("New Tab")
+
+            Divider()
+
+            Button {
+                guard let id = layoutManager.focusedPaneID else { return }
+                layoutManager.addPaneRight(of: id)
+            } label: {
+                Image(systemName: "rectangle.righthalf.inset.filled")
+                    .accessibilityLabel("Split Right")
+            }
+            .help("Split Right")
+
+            Button {
+                guard let id = layoutManager.focusedPaneID else { return }
+                layoutManager.addPaneLeft(of: id)
+            } label: {
+                Image(systemName: "rectangle.lefthalf.inset.filled")
+                    .accessibilityLabel("Split Left")
+            }
+            .help("Split Left")
+
+            Divider()
+
+            Button {
+                guard let id = layoutManager.focusedPaneID else { return }
+                layoutManager.addRowBelow(of: id)
+            } label: {
+                Image(systemName: "rectangle.bottomhalf.inset.filled")
+                    .accessibilityLabel("Add Row Below")
+            }
+            .help("Add Row Below")
+
+            Button {
+                guard let id = layoutManager.focusedPaneID else { return }
+                layoutManager.addRowAbove(of: id)
+            } label: {
+                Image(systemName: "rectangle.tophalf.inset.filled")
+                    .accessibilityLabel("Add Row Above")
+            }
+            .help("Add Row Above")
+
+            Divider()
+
+            Button(role: .destructive) {
+                guard let id = layoutManager.focusedPaneID else { return }
+                layoutManager.removePane(id)
+            } label: {
+                Image(systemName: "rectangle.badge.minus")
+                    .accessibilityLabel("Remove Pane")
+            }
+            .disabled(layoutManager.totalPaneCount <= 1)
+            .help("Remove Pane")
+        } label: {
+            Image(systemName: "plus.square.on.square")
+        }
+        .help("Arrange Panes")
     }
 
     private func paste() {

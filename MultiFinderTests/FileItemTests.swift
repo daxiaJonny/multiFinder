@@ -151,4 +151,38 @@ final class FileItemTests: XCTestCase {
 
         XCTAssertEqual(dropped.url.standardizedFileURL, file.standardizedFileURL)
     }
+
+    func testFileDragProviderSetsSuggestedNameFromOriginalFilename() throws {
+        let file = temporaryDirectory.appendingPathComponent("季度报表.xlsx")
+        try Data("xlsx".utf8).write(to: file)
+
+        let provider = try XCTUnwrap(FileDragProvider.provider(for: [file]))
+
+        XCTAssertEqual(provider.suggestedName, "季度报表.xlsx")
+        XCTAssertTrue(provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier))
+        XCTAssertNil(NSItemProvider(contentsOf: file)?.suggestedName)
+    }
+
+    func testFileDragProviderFileRepresentationKeepsOriginalFilename() async throws {
+        let file = temporaryDirectory.appendingPathComponent("季度报表.xlsx")
+        try Data("xlsx".utf8).write(to: file)
+        let provider = try XCTUnwrap(FileDragProvider.provider(for: [file]))
+        let typeIdentifier = try XCTUnwrap(
+            provider.registeredTypeIdentifiers.first { identifier in
+                identifier != UTType.fileURL.identifier && identifier != UTType.url.identifier
+            }
+        )
+
+        let filename: String = try await withCheckedThrowingContinuation { continuation in
+            _ = provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { url, error in
+                if let url {
+                    continuation.resume(returning: url.lastPathComponent)
+                } else {
+                    continuation.resume(throwing: error ?? CocoaError(.fileReadUnknown))
+                }
+            }
+        }
+
+        XCTAssertEqual(filename, "季度报表.xlsx")
+    }
 }

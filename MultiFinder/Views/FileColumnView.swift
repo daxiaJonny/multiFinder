@@ -62,6 +62,13 @@ struct FileColumnView: View {
             }
         }
         .listStyle(.plain)
+        .overlay {
+            FileTableRangeSelectionMonitor(
+                itemIDs: viewModel.visibleItems.map(\.id),
+                selection: focusedSelection
+            )
+            .allowsHitTesting(false)
+        }
         .focused($hasKeyboardFocus)
         .contextMenu(forSelectionType: FileItem.ID.self) { selection in
             FinderItemsContextMenu(

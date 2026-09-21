@@ -201,7 +201,7 @@ struct FileGridView: View {
                 get: { inlineRenameDraft },
                 set: { inlineRenameDraft = $0 }
             ),
-            onSelect: { select(item) },
+            onSelect: { select(item, modifiers: $0) },
             onDoubleClick: { open(item: item) },
             onCommitRename: { newName in
                 finishInlineRename(commit: true, submittedName: newName)
@@ -328,12 +328,11 @@ struct FileGridView: View {
         return modifiers
     }
 
-    private func select(_ item: FileItem) {
+    private func select(_ item: FileItem, modifiers: EventModifiers) {
         focusGrid()
 
         let visibleItems = viewModel.visibleItems
         guard let itemIndex = visibleItems.firstIndex(where: { $0.id == item.id }) else { return }
-        let modifiers = NSApp?.currentEvent?.modifierFlags ?? []
         let isCommandDown = modifiers.contains(.command)
         let isShiftDown = modifiers.contains(.shift)
 
@@ -920,6 +919,26 @@ private struct FileGridKeyboardFocusView: NSViewRepresentable {
     }
 }
 
+extension View {
+    func fileSelectionGestures(
+        onSelect: @escaping (EventModifiers) -> Void,
+        onDoubleClick: @escaping () -> Void
+    ) -> some View {
+        // Capture modifiers in the gesture, before double-click recognition can delay selection.
+        let modifiedClick = TapGesture().modifiers([.command, .shift])
+            .onEnded { onSelect([.command, .shift]) }
+            .exclusively(before: TapGesture().modifiers(.shift)
+                .onEnded { onSelect(.shift) })
+            .exclusively(before: TapGesture().modifiers(.command)
+                .onEnded { onSelect(.command) })
+
+        return self
+            .onTapGesture(count: 2, perform: onDoubleClick)
+            .onTapGesture { onSelect([]) }
+            .highPriorityGesture(modifiedClick)
+    }
+}
+
 private struct FileGridCell: View {
     let item: FileItem
     let thumbnailSize: CGSize
@@ -927,7 +946,7 @@ private struct FileGridCell: View {
     let isDropTargeted: Bool
     let isRenaming: Bool
     @Binding var renameText: String
-    let onSelect: () -> Void
+    let onSelect: (EventModifiers) -> Void
     let onDoubleClick: () -> Void
     let onCommitRename: (String) -> Void
     let onCancelRename: () -> Void
@@ -989,8 +1008,7 @@ private struct FileGridCell: View {
             }
         }
         .contentShape(RoundedRectangle(cornerRadius: 6))
-        .onTapGesture(count: 2, perform: onDoubleClick)
-        .onTapGesture(perform: onSelect)
+        .fileSelectionGestures(onSelect: onSelect, onDoubleClick: onDoubleClick)
         .accessibilityElement(children: isRenaming ? .contain : .combine)
         .accessibilityLabel(item.name)
         .accessibilityValue(item.kind)

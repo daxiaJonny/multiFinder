@@ -178,7 +178,7 @@ struct FileGalleryView: View {
             item: item,
             isSelected: viewModel.selectedItems.contains(item.id),
             isDropTargeted: dropTargetID == item.id,
-            onSelect: { select(item) },
+            onSelect: { select(item, modifiers: $0) },
             onDoubleClick: { open(item: item) }
         )
         .contextMenu {
@@ -201,11 +201,10 @@ struct FileGalleryView: View {
         hasKeyboardFocus = true
     }
 
-    private func select(_ item: FileItem) {
+    private func select(_ item: FileItem, modifiers: EventModifiers) {
         focusGallery()
         let visibleItems = viewModel.visibleItems
         guard let itemIndex = visibleItems.firstIndex(where: { $0.id == item.id }) else { return }
-        let modifiers = NSApp?.currentEvent?.modifierFlags ?? []
         let isCommandDown = modifiers.contains(.command)
         let isShiftDown = modifiers.contains(.shift)
 
@@ -330,7 +329,7 @@ private struct FileGalleryCell: View {
     let item: FileItem
     let isSelected: Bool
     let isDropTargeted: Bool
-    let onSelect: () -> Void
+    let onSelect: (EventModifiers) -> Void
     let onDoubleClick: () -> Void
 
     var body: some View {
@@ -344,8 +343,7 @@ private struct FileGalleryCell: View {
     private var interactiveCell: some View {
         styledCell
             .contentShape(RoundedRectangle(cornerRadius: 6))
-            .onTapGesture(count: 2, perform: onDoubleClick)
-            .onTapGesture(perform: onSelect)
+            .fileSelectionGestures(onSelect: onSelect, onDoubleClick: onDoubleClick)
     }
 
     private var styledCell: some View {

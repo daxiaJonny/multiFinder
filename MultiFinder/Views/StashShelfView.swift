@@ -318,7 +318,8 @@ struct StashShelfView: View {
             hoveredItemID = isHovering ? item.id : nil
         }
         .onDrag {
-            NSItemProvider(object: item.url as NSURL)
+            FileDragProvider.provider(for: [item.url])
+                ?? NSItemProvider(object: item.url as NSURL)
         }
     }
 

@@ -64,6 +64,32 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(restored.preferredTerminalApplication, .terminal)
         XCTAssertFalse(restored.showHiddenFilesByDefault)
         XCTAssertEqual(restored.cursorCLIExecutablePath, AppSettings.defaultCursorCLIExecutablePath)
+        XCTAssertEqual(restored.pinnedToolbarToolIDs, AppSettings.defaultPinnedToolIDs)
+    }
+
+    func testPinnedToolbarToolsOperations() {
+        let (defaults, suiteName) = makeUserDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let settings = AppSettings(userDefaults: defaults)
+
+        XCTAssertTrue(settings.isToolPinned(.commandPalette))
+        XCTAssertTrue(settings.isToolPinned(.stashShelf))
+        XCTAssertFalse(settings.isToolPinned(.terminal))
+
+        settings.pinTool(.terminal)
+        XCTAssertTrue(settings.isToolPinned(.terminal))
+
+        settings.unpinTool(.commandPalette)
+        XCTAssertFalse(settings.isToolPinned(.commandPalette))
+
+        settings.toggleToolPinned(.search)
+        XCTAssertTrue(settings.isToolPinned(.search))
+
+        settings.toggleToolPinned(.search)
+        XCTAssertFalse(settings.isToolPinned(.search))
+
+        let restored = AppSettings(userDefaults: defaults)
+        XCTAssertEqual(restored.pinnedToolbarToolIDs, settings.pinnedToolbarToolIDs)
     }
 
     func testCursorCLIPathResolutionTrimsWhitespaceAndUsesDefaultForBlankInput() {

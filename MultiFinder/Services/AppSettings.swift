@@ -59,12 +59,20 @@ final class AppSettings: ObservableObject {
     nonisolated static let preferredTerminalDefaultsKey = "PreferredTerminalApplication"
     nonisolated static let showHiddenFilesDefaultsKey = "ShowHiddenFilesByDefault"
     nonisolated static let cursorCLIExecutablePathDefaultsKey = "AIPlannerExecutablePath"
+    nonisolated static let pinnedToolbarToolsDefaultsKey = "PinnedToolbarTools"
 
     nonisolated static var defaultCursorCLIExecutablePath: String {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".local/bin/agent")
             .path
     }
+
+    static let defaultPinnedToolIDs: [String] = [
+        ToolbarToolID.commandPalette.rawValue,
+        ToolbarToolID.stashShelf.rawValue,
+        ToolbarToolID.aiAssistant.rawValue,
+        ToolbarToolID.arrangePanes.rawValue
+    ]
 
     nonisolated static func resolvedCursorCLIExecutableURL(from path: String?) -> URL {
         let trimmed = path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -103,6 +111,12 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    @Published var pinnedToolbarToolIDs: [String] {
+        didSet {
+            userDefaults.set(pinnedToolbarToolIDs, forKey: Self.pinnedToolbarToolsDefaultsKey)
+        }
+    }
+
     private let userDefaults: UserDefaults
 
     init(userDefaults: UserDefaults = .standard) {
@@ -118,6 +132,36 @@ final class AppSettings: ObservableObject {
         showHiddenFilesByDefault = userDefaults.bool(forKey: Self.showHiddenFilesDefaultsKey)
         cursorCLIExecutablePath = userDefaults.string(forKey: Self.cursorCLIExecutablePathDefaultsKey)
             ?? Self.defaultCursorCLIExecutablePath
+        if let savedTools = userDefaults.stringArray(forKey: Self.pinnedToolbarToolsDefaultsKey) {
+            pinnedToolbarToolIDs = savedTools
+        } else {
+            pinnedToolbarToolIDs = Self.defaultPinnedToolIDs
+        }
+    }
+
+    func isToolPinned(_ id: ToolbarToolID) -> Bool {
+        pinnedToolbarToolIDs.contains(id.rawValue)
+    }
+
+    func toggleToolPinned(_ id: ToolbarToolID) {
+        if isToolPinned(id) {
+            pinnedToolbarToolIDs.removeAll { $0 == id.rawValue }
+        } else {
+            pinnedToolbarToolIDs.append(id.rawValue)
+        }
+    }
+
+    func pinTool(_ id: ToolbarToolID) {
+        guard !isToolPinned(id) else { return }
+        pinnedToolbarToolIDs.append(id.rawValue)
+    }
+
+    func unpinTool(_ id: ToolbarToolID) {
+        pinnedToolbarToolIDs.removeAll { $0 == id.rawValue }
+    }
+
+    func resetPinnedToolsToDefault() {
+        pinnedToolbarToolIDs = Self.defaultPinnedToolIDs
     }
 
     func restoreDefaults() {
@@ -126,5 +170,6 @@ final class AppSettings: ObservableObject {
         preferredTerminalApplication = .terminal
         showHiddenFilesByDefault = false
         cursorCLIExecutablePath = Self.defaultCursorCLIExecutablePath
+        resetPinnedToolsToDefault()
     }
 }
