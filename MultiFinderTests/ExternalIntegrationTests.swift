@@ -4,6 +4,58 @@ import XCTest
 
 @MainActor
 final class ExternalIntegrationTests: XCTestCase {
+    func testNewTabRequestRoundTripsAndDoesNotDeduplicateOrdinaryOpen() throws {
+        let target = URL(fileURLWithPath: "/tmp/A & B/#notes.txt")
+        let url = try XCTUnwrap(ExternalOpenRequest.url(for: target, opensInNewTab: true))
+        XCTAssertEqual(ExternalOpenRequest(url: url)?.opensInNewTab, true)
+        XCTAssertEqual(ExternalOpenRequest(url: url)?.targetURL, target)
+        let router = ExternalOpenRouter()
+        var modes: [Bool] = []
+        router.register { modes.append($0.opensInNewTab) }
+        XCTAssertEqual(router.receive(urls: [target, url]), 2)
+        XCTAssertEqual(router.receive(urls: [url], source: .swiftUI), 0)
+        XCTAssertEqual(modes, [false, true])
+    }
+
+    func testNewTabRequestRejectsMalformedOptions() throws {
+        for query in ["newTab=maybe", "newTab", "newTab=true&newTab=false"] {
+            let url = try XCTUnwrap(URL(string: "multifinder://open?path=/tmp&\(query)"))
+            XCTAssertNil(ExternalOpenRequest(url: url))
+        }
+    }
+
+    func testExternalNewTabKeepsExistingTabAndRevealsFile() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("selected.txt")
+        try Data().write(to: file)
+        let manager = LayoutManager()
+        let pane = try XCTUnwrap(manager.focusedBrowserPane)
+        let original = pane.selectedTab
+        original.navigate(to: directory)
+        original.viewMode = .gallery
+        original.filterText = "original filter"
+        let paneCount = manager.totalPaneCount
+        let tabCount = pane.tabs.count
+
+        XCTAssertTrue(manager.openExternalPaths([file], inNewTab: true))
+        let opened = pane.selectedTab
+        try await waitUntil { !opened.isLoading }
+        XCTAssertEqual(pane.tabs.count, tabCount + 1)
+        XCTAssertEqual(manager.totalPaneCount, paneCount)
+        XCTAssertFalse(opened === original)
+        XCTAssertEqual(original.filterText, "original filter")
+        XCTAssertEqual(opened.viewMode, .gallery)
+        XCTAssertEqual(opened.currentURL, directory.standardizedFileURL)
+        XCTAssertEqual(opened.selectedItems, [file.standardizedFileURL])
+
+        XCTAssertTrue(manager.openExternalPaths([directory], inNewTab: true))
+        XCTAssertEqual(pane.tabs.count, tabCount + 2)
+        XCTAssertFalse(manager.openExternalPaths([directory.appendingPathComponent("missing")], inNewTab: true))
+        XCTAssertEqual(pane.tabs.count, tabCount + 2)
+    }
+
     func testExternalOpenRequestRoundTripsEncodedPath() throws {
         let target = URL(fileURLWithPath: "/tmp/MultiFinder/A & B")
         let requestURL = try XCTUnwrap(ExternalOpenRequest.url(for: target))

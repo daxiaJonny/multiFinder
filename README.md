@@ -12,9 +12,36 @@ xcodebuild -project MultiFinder.xcodeproj -scheme MultiFinder -configuration Deb
 xcodebuild -project MultiFinder.xcodeproj -scheme MultiFinder -configuration Debug CODE_SIGNING_ALLOWED=NO test
 ```
 
-The app uses native SwiftUI tables for keyboard and accessibility behavior. Browser locations explicitly distinguish directories, Recents, and Spotlight searches. A toolbar star stores frequently used folders in the shared sidebar favorites list. File mutations run through a serial background operation queue with conflict resolution, progress, cancellation, retry history, and undo/redo.
+The app uses virtualized AppKit tables and collections for file views. Browser locations explicitly distinguish directories, Recents, and Spotlight searches. A toolbar star stores frequently used folders in the shared sidebar favorites list. File mutations run through a serial background operation queue with conflict resolution, progress, cancellation, retry history, and undo/redo.
 
 The toolbar keeps file search, read-only folder questions, and AI organization as separate actions. Search uses Spotlight. Folder questions use the local Cursor CLI in `ask` mode and can be opened with Option-Command-A. AI organization uses a validated, previewable operation plan and never changes files before confirmation.
+
+## Terminal integration
+
+`mfd [path]` opens a local path using the existing pane routing. `mfd --new-tab [path]`
+creates a tab in the focused pane, preserving existing tabs. Both default to the
+working directory; a file or package passed with `--new-tab` is selected in its
+enclosing folder. Paths with spaces can be quoted, and `--` ends option parsing.
+
+```sh
+mfd --new-tab ~/Downloads
+mfd --new-tab "./report draft.txt"
+mfd --new-tab -- ./-notes
+```
+
+The URL equivalent is `multifinder://open?path=/absolute/path&newTab=true`.
+
+## Performance checks
+
+Directory names are prepared and sorted off the main actor before metadata is
+loaded. Refreshes reuse known metadata, and cancelled loads stop their background
+workers. `FileBrowserPerformanceTests` records natural sorting and progressive
+loading for 10,000 files; timings depend on the machine, filesystem cache, and
+build configuration. Run this subset with:
+
+```sh
+xcodebuild -project MultiFinder.xcodeproj -scheme MultiFinder -configuration Debug CODE_SIGNING_ALLOWED=NO -only-testing:MultiFinderTests/FileBrowserPerformanceTests test
+```
 
 ## Distribution
 

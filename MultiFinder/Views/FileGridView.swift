@@ -62,6 +62,7 @@ struct FileGridView: View {
         VirtualFileGrid(
             items: viewModel.visibleItems,
             itemsRevision: viewModel.itemsRevision,
+            tableRevision: viewModel.tableRevision,
             selection: viewModel.selectedItems,
             gitIndex: gitIndex,
             gitGeneration: gitPulse.generation,

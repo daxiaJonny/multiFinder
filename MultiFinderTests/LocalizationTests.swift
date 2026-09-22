@@ -36,6 +36,8 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(localized("Sort Direction", locale: "zh-Hans"), "排序方向")
         XCTAssertEqual(localized("iCloud Drive", locale: "zh-Hans"), "iCloud 云盘")
         XCTAssertEqual(localized("Done", locale: "zh-Hans"), "完成")
+        XCTAssertEqual(localized("Eject %@", locale: "zh-Hans"), "推出 %@")
+        XCTAssertEqual(localized("Ejecting %@...", locale: "zh-Hans"), "正在推出 %@…")
         XCTAssertEqual(localized("Hide Sidebar", locale: "zh-Hans"), "隐藏边栏")
         XCTAssertEqual(localized("Go to Folder…", locale: "zh-Hans"), "前往文件夹…")
     }

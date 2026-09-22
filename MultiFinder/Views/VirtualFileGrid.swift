@@ -5,9 +5,11 @@ import SwiftUI
 struct VirtualFileGrid: NSViewRepresentable {
     let items: [FileItem]
     let itemsRevision: UInt64
+    var tableRevision: UInt64 = 0
     let selection: Set<FileItem.ID>
     let gitIndex: GitChangeIndex?
     let gitGeneration: UInt64
+    var scrollsHorizontally: Bool = false
     let onSelection: (Set<FileItem.ID>) -> Void
     let onOpen: (FileItem) -> Void
     let onFocus: () -> Void
@@ -20,10 +22,12 @@ struct VirtualFileGrid: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSScrollView {
         let layout = NSCollectionViewFlowLayout()
-        layout.itemSize = NSSize(width: 96, height: 112)
+        let horizontal = context.coordinator.parent.scrollsHorizontally
+        layout.scrollDirection = horizontal ? .horizontal : .vertical
+        layout.itemSize = horizontal ? NSSize(width: 108, height: 132) : NSSize(width: 96, height: 112)
         layout.minimumInteritemSpacing = 12
-        layout.minimumLineSpacing = 14
-        layout.sectionInset = NSEdgeInsets(top: 14, left: 14, bottom: 14, right: 14)
+        layout.minimumLineSpacing = horizontal ? 8 : 14
+        layout.sectionInset = NSEdgeInsets(top: horizontal ? 8 : 14, left: 14, bottom: horizontal ? 8 : 14, right: 14)
 
         let collection = VirtualFileCollectionView()
         collection.coordinator = context.coordinator
@@ -41,7 +45,8 @@ struct VirtualFileGrid: NSViewRepresentable {
         collection.registerForDraggedTypes([.fileURL])
 
         let scrollView = NSScrollView()
-        scrollView.hasVerticalScroller = true
+        scrollView.hasVerticalScroller = !context.coordinator.parent.scrollsHorizontally
+        scrollView.hasHorizontalScroller = context.coordinator.parent.scrollsHorizontally
         scrollView.autohidesScrollers = true
         scrollView.scrollerStyle = .overlay
         scrollView.drawsBackground = true
@@ -95,8 +100,10 @@ extension VirtualFileGrid {
         var parent: VirtualFileGrid
         weak var collectionView: VirtualFileCollectionView?
         private var items: [FileItem] = []
+        private var indexByID: [FileItem.ID: Int] = [:]
         private var gitIndex: GitChangeIndex?
         private var appliedItemsRevision: UInt64 = .max
+        private var appliedTableRevision: UInt64 = .max
         private var appliedGitGeneration: UInt64 = .max
         private var isApplyingSelection = false
 
@@ -107,15 +114,21 @@ extension VirtualFileGrid {
         func apply(_ parent: VirtualFileGrid) {
             self.parent = parent
             guard let collectionView else { return }
-            if parent.itemsRevision == appliedItemsRevision, parent.gitGeneration == appliedGitGeneration {
+            if parent.itemsRevision == appliedItemsRevision,
+               parent.tableRevision == appliedTableRevision,
+               parent.gitGeneration == appliedGitGeneration {
                 applySelection(parent.selection, in: collectionView)
                 return
             }
             let idsChanged = !items.elementsEqual(parent.items) { $0.id == $1.id }
             let gitChanged = parent.gitGeneration != appliedGitGeneration
             items = parent.items
+            if idsChanged {
+                indexByID = Dictionary(items.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
+            }
             gitIndex = parent.gitIndex
             appliedItemsRevision = parent.itemsRevision
+            appliedTableRevision = parent.tableRevision
             appliedGitGeneration = parent.gitGeneration
             if idsChanged || gitChanged {
                 collectionView.reloadData()
@@ -211,8 +224,8 @@ extension VirtualFileGrid {
         }
 
         private func applySelection(_ selection: Set<FileItem.ID>, in collectionView: NSCollectionView) {
-            let paths = Set(items.indices.compactMap { index -> IndexPath? in
-                selection.contains(items[index].id) ? IndexPath(item: index, section: 0) : nil
+            let paths = Set(selection.compactMap { id -> IndexPath? in
+                indexByID[id].map { IndexPath(item: $0, section: 0) }
             })
             guard paths != collectionView.selectionIndexPaths else { return }
             isApplyingSelection = true

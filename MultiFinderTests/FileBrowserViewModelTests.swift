@@ -308,6 +308,55 @@ final class FileBrowserViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSortChangeAfterPlaceholderPublicationWinsOverMetadataPass() async throws {
+        for index in 1...500 {
+            try Data(repeating: 0, count: index).write(to: temporaryDirectory.appendingPathComponent("item-\(index)"))
+        }
+        let viewModel = FileBrowserViewModel(location: .directory(temporaryDirectory))
+        var changedSort = false
+        let subscription = viewModel.$items.sink { items in
+            guard !changedSort, items.contains(where: { !$0.isMetadataLoaded }) else { return }
+            changedSort = true
+            Task { @MainActor in
+                viewModel.setSort(by: .size, ascending: false)
+            }
+        }
+        try await waitUntil { !viewModel.isLoading }
+        withExtendedLifetime(subscription) {}
+        XCTAssertTrue(changedSort)
+        XCTAssertEqual(viewModel.items.first?.size, 500)
+        XCTAssertEqual(viewModel.items.last?.size, 1)
+    }
+
+    @MainActor
+    func testRefreshRetainsKnownMetadataUntilReplacementArrives() async throws {
+        let file = temporaryDirectory.appendingPathComponent("known.txt")
+        try Data("known metadata".utf8).write(to: file)
+        let viewModel = FileBrowserViewModel(location: .directory(temporaryDirectory))
+        try await waitUntil { !viewModel.isLoading }
+        var publishedPlaceholder = false
+        let subscription = viewModel.$items.dropFirst().sink { items in
+            if items.contains(where: { !$0.isMetadataLoaded || $0.size == 0 }) {
+                publishedPlaceholder = true
+            }
+        }
+        viewModel.refresh()
+        try await waitUntil { !viewModel.isLoading }
+        withExtendedLifetime(subscription) {}
+        XCTAssertFalse(publishedPlaceholder)
+        XCTAssertEqual(viewModel.items.first?.size, 14)
+    }
+
+    @MainActor
+    func testOpeningPlaceholderDirectoryNavigatesInsideApp() throws {
+        let child = temporaryDirectory.appendingPathComponent("Child", isDirectory: true)
+        try FileManager.default.createDirectory(at: child, withIntermediateDirectories: false)
+        let viewModel = FileBrowserViewModel(location: .directory(temporaryDirectory))
+        viewModel.openItem(FileItem(named: "Child", in: temporaryDirectory))
+        XCTAssertEqual(viewModel.currentURL, child.standardizedFileURL)
+    }
+
+    @MainActor
     func testFilterMatchesCaseAndDiacriticsAndLimitsSelectAll() async throws {
         try Data().write(to: temporaryDirectory.appendingPathComponent("Résumé.txt"))
         try Data().write(to: temporaryDirectory.appendingPathComponent("REPORT.log"))

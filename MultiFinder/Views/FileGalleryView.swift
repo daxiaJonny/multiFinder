@@ -68,25 +68,45 @@ struct FileGalleryView: View {
     }
 
     private var filmstrip: some View {
-        ScrollViewReader { scrollProxy in
-            ScrollView(.horizontal) {
-                LazyHStack(alignment: .top, spacing: 8) {
-                    let gitIndex = gitPulse.cachedChangeIndex(for: viewModel.currentURL)
-                    ForEach(viewModel.visibleItems) { item in
-                        galleryCell(for: item, gitIndex: gitIndex)
-                            .id(item.id)
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .frame(minWidth: 1, maxHeight: .infinity, alignment: .leading)
+        let gitIndex = gitPulse.cachedChangeIndex(for: viewModel.currentURL)
+        return VirtualFileGrid(
+            items: viewModel.visibleItems,
+            itemsRevision: viewModel.itemsRevision,
+            tableRevision: viewModel.tableRevision,
+            selection: viewModel.selectedItems,
+            gitIndex: gitIndex,
+            gitGeneration: gitPulse.generation,
+            scrollsHorizontally: true,
+            onSelection: { selection in
+                focusGallery()
+                viewModel.selectedItems = selection
+                selectionAnchor = selection.first
+                selectionCursor = selection.first
+            },
+            onOpen: { item in
+                focusGallery()
+                viewModel.openItem(item)
+            },
+            onFocus: focusGallery,
+            onQuickLook: {
+                focusGallery()
+                onQuickLook()
+            },
+            onBeginFiltering: onBeginFiltering,
+            onDelete: {
+                focusGallery()
+                viewModel.deleteSelected()
+            },
+            onDrop: { urls, destination in
+                focusGallery()
+                viewModel.transferDroppedItems(
+                    urls,
+                    into: destination,
+                    operation: FileDropModifierKeys.operation(for: urls, into: destination)
+                )
             }
-            .scrollIndicators(.visible)
-            .background(Color(nsColor: .textBackgroundColor))
-            .focusable()
-            .focusEffectDisabled()
-            .focused($hasKeyboardFocus)
-            .contextMenu {
+        )
+        .contextMenu {
                 FinderItemsContextMenu(
                     viewModel: viewModel,
                     selection: viewModel.selectedItems,
@@ -133,13 +153,6 @@ struct FileGalleryView: View {
                 viewModel.deleteSelected()
                 return .handled
             }
-            .onKeyPress(.leftArrow, phases: .down) { keyPress in
-                moveSelection(by: -1, modifiers: keyPress.modifiers, scrollProxy: scrollProxy)
-            }
-            .onKeyPress(.rightArrow, phases: .down) { keyPress in
-                moveSelection(by: 1, modifiers: keyPress.modifiers, scrollProxy: scrollProxy)
-            }
-        }
     }
 
     @ViewBuilder

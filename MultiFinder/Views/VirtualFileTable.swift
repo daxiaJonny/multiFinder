@@ -5,6 +5,7 @@ import SwiftUI
 struct VirtualFileTable: NSViewRepresentable {
     let items: [FileItem]
     let itemsRevision: UInt64
+    var tableRevision: UInt64 = 0
     let selection: Set<FileItem.ID>
     let sortOrder: [FileItemComparator]
     let gitIndex: GitChangeIndex?
@@ -158,8 +159,10 @@ extension VirtualFileTable {
         var parent: VirtualFileTable
         weak var tableView: VirtualFileTableView?
         private var items: [FileItem] = []
+        private var rowByID: [FileItem.ID: Int] = [:]
         private var gitIndex: GitChangeIndex?
         private var appliedItemsRevision: UInt64 = .max
+        private var appliedTableRevision: UInt64 = .max
         private var appliedGitGeneration: UInt64 = .max
         private var isApplyingSelection = false
 
@@ -170,7 +173,9 @@ extension VirtualFileTable {
         func apply(_ parent: VirtualFileTable) {
             self.parent = parent
             guard let tableView else { return }
-            if parent.itemsRevision == appliedItemsRevision, parent.gitGeneration == appliedGitGeneration {
+            if parent.itemsRevision == appliedItemsRevision,
+               parent.tableRevision == appliedTableRevision,
+               parent.gitGeneration == appliedGitGeneration {
                 applySelection(parent.selection, in: tableView)
                 applySortIndicator(parent.sortOrder, in: tableView)
                 return
@@ -179,8 +184,12 @@ extension VirtualFileTable {
             let contentChanged = items != parent.items
             let gitChanged = gitIndex != parent.gitIndex
             items = parent.items
+            if idsChanged {
+                rowByID = Dictionary(items.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
+            }
             gitIndex = parent.gitIndex
             appliedItemsRevision = parent.itemsRevision
+            appliedTableRevision = parent.tableRevision
             appliedGitGeneration = parent.gitGeneration
             if idsChanged {
                 let origin = tableView.enclosingScrollView?.contentView.bounds.origin
@@ -299,7 +308,7 @@ extension VirtualFileTable {
         }
 
         private func applySelection(_ selection: Set<FileItem.ID>, in tableView: NSTableView) {
-            let indexes = IndexSet(items.indices.filter { selection.contains(items[$0].id) })
+            let indexes = IndexSet(selection.compactMap { rowByID[$0] })
             guard indexes != tableView.selectedRowIndexes else { return }
             isApplyingSelection = true
             tableView.selectRowIndexes(indexes, byExtendingSelection: false)
@@ -320,6 +329,7 @@ extension VirtualFileTable {
         }
 
         private static func detailText(for item: FileItem, column: String) -> String {
+            if !item.isMetadataLoaded, column == "date" || column == "size" { return "--" }
             switch column {
             case "date":
                 return Self.dateFormatter.string(from: item.modificationDate)

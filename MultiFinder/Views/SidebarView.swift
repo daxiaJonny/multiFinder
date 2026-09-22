@@ -390,6 +390,8 @@ struct SidebarView: View {
                 ProgressView()
                     .controlSize(.small)
                     .frame(width: 18, height: 18)
+                    .help(L10n.format("Ejecting %@...", volume.name))
+                    .accessibilityLabel(L10n.format("Ejecting %@...", volume.name))
             } else if volume.canEject {
                 Button {
                     volumeStore.eject(volume)
@@ -408,6 +410,16 @@ struct SidebarView: View {
         .frame(minHeight: 24)
         .tag(SidebarDestination.directory(volume.url))
         .help(volumeHelp(for: volume))
+        .contextMenu {
+            if volume.canEject {
+                Button {
+                    volumeStore.eject(volume)
+                } label: {
+                    Label(L10n.format("Eject %@", volume.name), systemImage: "eject.fill")
+                }
+                .disabled(volumeStore.isEjecting(volume))
+            }
+        }
     }
 
     private func volumeErrorRow(_ message: String) -> some View {

@@ -61,7 +61,7 @@ final class VolumeStoreTests: XCTestCase {
 
         let network = try XCTUnwrap(store.volumes.first { $0.url == networkURL })
         XCTAssertTrue(network.isNetwork)
-        XCTAssertFalse(network.canEject)
+        XCTAssertTrue(network.canEject)
     }
 
     func testRefreshSkipsUnreadableVolumesAndSurfacesReadableError() {
@@ -141,6 +141,7 @@ final class VolumeStoreTests: XCTestCase {
         let volume = try XCTUnwrap(store.volumes.first)
 
         store.eject(volume)
+        store.eject(volume)
         XCTAssertTrue(store.isEjecting(volume))
         XCTAssertEqual(recorder.requestedURLs, [volumeURL])
 
@@ -185,6 +186,74 @@ final class VolumeStoreTests: XCTestCase {
         XCTAssertFalse(store.isEjecting(removable))
         XCTAssertNil(store.errorMessage)
         XCTAssertEqual(store.volumes.count, 2)
+    }
+
+    func testSystemVolumeCannotBeEjectedEvenWithRemovableFlags() throws {
+        let root = URL(fileURLWithPath: "/")
+        let system = URL(fileURLWithPath: "/System/Volumes/Data")
+        let recorder = EjectRecorder()
+        let store = VolumeStore(
+            mountedVolumeProvider: { [root, system] },
+            resourceValuesProvider: { url in
+                VolumeResourceValues(
+                    isLocal: false, isRemovable: true, isEjectable: true,
+                    isRootFileSystem: url == system
+                )
+            },
+            ejectHandler: { url, _ in recorder.requestedURLs.append(url) }
+        )
+        XCTAssertEqual(store.volumes.count, 2)
+        for volume in store.volumes {
+            XCTAssertFalse(volume.canEject)
+            store.eject(volume)
+        }
+        XCTAssertTrue(recorder.requestedURLs.isEmpty)
+    }
+
+    func testNetworkVolumeCanBeDisconnectedAndDisappearsAfterSuccess() async throws {
+        let url = URL(fileURLWithPath: "/Volumes/Office NAS")
+        var mountedURLs = [url]
+        let recorder = EjectRecorder()
+        let store = VolumeStore(
+            mountedVolumeProvider: { mountedURLs },
+            resourceValuesProvider: { _ in VolumeResourceValues(name: "Office NAS", isLocal: false) },
+            ejectHandler: { url, completion in
+                recorder.requestedURLs.append(url)
+                recorder.completion = completion
+            }
+        )
+        let volume = try XCTUnwrap(store.volumes.first)
+        store.eject(volume)
+        XCTAssertEqual(recorder.requestedURLs, [url])
+        XCTAssertTrue(store.isEjecting(volume))
+        mountedURLs = []
+        recorder.completion?(nil)
+        await flushMainActor()
+        XCTAssertFalse(store.isEjecting(volume))
+        XCTAssertTrue(store.volumes.isEmpty)
+        XCTAssertNil(store.errorMessage)
+    }
+
+    func testEjectRejectsStaleVolumeAfterUnmountOrCapabilityChange() throws {
+        let url = URL(fileURLWithPath: "/Volumes/Installer")
+        var mountedURLs = [url]
+        var isEjectable = true
+        let recorder = EjectRecorder()
+        let store = VolumeStore(
+            mountedVolumeProvider: { mountedURLs },
+            resourceValuesProvider: { _ in VolumeResourceValues(isEjectable: isEjectable) },
+            ejectHandler: { url, _ in recorder.requestedURLs.append(url) }
+        )
+        let staleVolume = try XCTUnwrap(store.volumes.first)
+        isEjectable = false
+        store.refresh()
+        store.eject(staleVolume)
+        XCTAssertTrue(recorder.requestedURLs.isEmpty)
+
+        mountedURLs = []
+        store.refresh()
+        store.eject(staleVolume)
+        XCTAssertTrue(recorder.requestedURLs.isEmpty)
     }
 
     private func flushMainActor() async {

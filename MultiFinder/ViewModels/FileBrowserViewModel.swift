@@ -258,7 +258,13 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
                     return
                 case .recents, .search:
                     let urls = try await metadataURLs(for: requestedLocation, includeHidden: includeHidden)
-                    loadedItems = try await Self.makeItems(from: urls, includeHidden: includeHidden)
+                    try await publishURLsProgressively(
+                        urls,
+                        includeHidden: includeHidden,
+                        generation: requestGeneration,
+                        requestedLocation: requestedLocation
+                    )
+                    return
                 case .aiSearch(let root, let criteria, _):
                     loadedItems = try await Self.loadAISearch(
                         root: root,
@@ -270,9 +276,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
                 try Task.checkCancellation()
                 guard loadGeneration == requestGeneration, location == requestedLocation else { return }
 
-                let currentComparator = sortOrder.first ?? FileItemComparator(field: .name)
-                let sortedItems = Self.sort(items: loadedItems, using: currentComparator)
-                applyLoadedItems(sortedItems)
+                try await publishSortedItems(loadedItems, generation: requestGeneration, requestedLocation: requestedLocation)
                 isLoading = false
             } catch is CancellationError {
                 // A newer request owns the loading state.
@@ -305,41 +309,94 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         items.sorted { comparator.compare($0, $1) == .orderedAscending }
     }
 
-    /// Publishes the first batch as soon as it is readable, then the rest.
+    /// Publishes names before reading metadata, retaining metadata already on screen.
     private func loadDirectoryProgressively(
         at url: URL,
         includeHidden: Bool,
         generation: UInt64,
         requestedLocation: BrowserLocation
     ) async throws {
-        let names = try await Task.detached {
-            try FileManager.default.contentsOfDirectory(atPath: url.path)
-        }.value
-        let visibleNames = includeHidden ? names : names.filter { !$0.hasPrefix(".") }
-        guard loadGeneration == generation, location == requestedLocation else { return }
-        let comparator = sortOrder.first ?? FileItemComparator(field: .name)
-        let firstCount = min(400, visibleNames.count)
-        let first = try await Self.makeFileItems(
-            named: Array(visibleNames.prefix(firstCount)),
+        let existingItems = items
+        let (visibleNames, placeholders) = try await FileBackgroundWork.run {
+            let names = try FileManager.default.contentsOfDirectory(atPath: url.path)
+            let visibleNames = includeHidden ? names : names.filter { !$0.hasPrefix(".") }
+            let existing = Dictionary(existingItems.map { ($0.url, $0) }, uniquingKeysWith: { first, _ in first })
+            var placeholders: [FileItem] = []
+            placeholders.reserveCapacity(visibleNames.count)
+            for (index, name) in visibleNames.enumerated() {
+                if index.isMultiple(of: 64) { try Task.checkCancellation() }
+                let item = existing[url.appendingPathComponent(name).standardizedFileURL]
+                    ?? FileItem(named: name, in: url)
+                if includeHidden || !item.isHidden { placeholders.append(item) }
+            }
+            return (visibleNames, placeholders)
+        }
+        try await publishSortedItems(placeholders, generation: generation, requestedLocation: requestedLocation, isComplete: false)
+        let full = try await Self.makeFileItems(
+            named: visibleNames,
             in: url,
             includeHidden: includeHidden
         )
-        guard loadGeneration == generation, location == requestedLocation else { return }
-        applyLoadedItems(Self.sort(items: first, using: comparator))
-        isLoading = firstCount < visibleNames.count
-        guard firstCount < visibleNames.count else {
+        try await publishSortedItems(full, generation: generation, requestedLocation: requestedLocation)
+        isLoading = false
+    }
+
+    private func publishURLsProgressively(
+        _ urls: [URL],
+        includeHidden: Bool,
+        generation: UInt64,
+        requestedLocation: BrowserLocation
+    ) async throws {
+        let firstCount = min(400, urls.count)
+        let first = try await Self.makeItems(
+            from: Array(urls.prefix(firstCount)),
+            includeHidden: includeHidden
+        )
+        try await publishSortedItems(first, generation: generation, requestedLocation: requestedLocation, isComplete: firstCount == urls.count)
+        guard firstCount < urls.count else {
             isLoading = false
             return
         }
-        let rest = try await Self.makeFileItems(
-            named: Array(visibleNames.dropFirst(firstCount)),
-            in: url,
+        isLoading = true
+        let rest = try await Self.makeItems(
+            from: Array(urls.dropFirst(firstCount)),
             includeHidden: includeHidden
         )
-        try Task.checkCancellation()
-        guard loadGeneration == generation, location == requestedLocation else { return }
-        applyLoadedItems(Self.sort(items: first + rest, using: comparator))
+        try await publishSortedItems(first + rest, generation: generation, requestedLocation: requestedLocation)
         isLoading = false
+    }
+
+    private func publishSortedItems(
+        _ loadedItems: [FileItem],
+        generation: UInt64,
+        requestedLocation: BrowserLocation,
+        isComplete: Bool = true
+    ) async throws {
+        while true {
+            try Task.checkCancellation()
+            guard loadGeneration == generation, location == requestedLocation else { throw CancellationError() }
+            let comparator = sortOrder.first ?? FileItemComparator(field: .name)
+            let sorted = try await Self.sorted(loadedItems, using: comparator)
+            guard loadGeneration == generation, location == requestedLocation else { throw CancellationError() }
+            // Sorting suspends the main actor; a newer sort preference wins before publication.
+            guard comparator == (sortOrder.first ?? FileItemComparator(field: .name)) else { continue }
+            applyLoadedItems(sorted, isComplete: isComplete)
+            return
+        }
+    }
+
+    private nonisolated static func sorted(
+        _ items: [FileItem],
+        using comparator: FileItemComparator
+    ) async throws -> [FileItem] {
+        try await FileBackgroundWork.run {
+            var comparisons = 0
+            return try items.sorted {
+                comparisons += 1
+                if comparisons.isMultiple(of: 256) { try Task.checkCancellation() }
+                return comparator.compare($0, $1) == .orderedAscending
+            }
+        }
     }
 
     private nonisolated static func makeFileItems(
@@ -347,7 +404,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         in directory: URL,
         includeHidden: Bool
     ) async throws -> [FileItem] {
-        try await Task.detached {
+        try await FileBackgroundWork.run {
             var items: [FileItem] = []
             items.reserveCapacity(names.count)
             for (index, name) in names.enumerated() {
@@ -358,7 +415,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
                 }
             }
             return items
-        }.value
+        }
     }
 
     private nonisolated static func loadDirectory(at url: URL, includeHidden: Bool) async throws -> [FileItem] {
@@ -406,7 +463,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         return items
     }
 
-    private func applyLoadedItems(_ loadedItems: [FileItem]) {
+    private func applyLoadedItems(_ loadedItems: [FileItem], isComplete: Bool = true) {
         if loadedItems == items, pendingSelectionURLs.isEmpty {
             return
         }
@@ -418,7 +475,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
             nextSelection = selectedItems.intersection(visibleIDs)
         } else {
             let pending = Set(pendingSelectionURLs.map(\.standardizedFileURL))
-            pendingSelectionURLs.removeAll()
+            if isComplete { pendingSelectionURLs.removeAll() }
             nextSelection = visibleIDs.intersection(pending)
         }
 
@@ -650,7 +707,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
             guard FileManager.default.fileExists(
                 atPath: normalizedFileURL.path,
                 isDirectory: &isDirectory
-            ), !isDirectory.boolValue else {
+            ), !isDirectory.boolValue || (try? normalizedFileURL.resourceValues(forKeys: [.isPackageKey]).isPackage) == true else {
                 return false
             }
 
@@ -714,6 +771,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     }
 
     func openItem(_ item: FileItem) {
+        let item = item.isMetadataLoaded ? item : FileItem(url: item.url)
         if Self.shouldNavigateInto(item) {
             navigate(to: .directory(item.url))
         } else if let applicationURL = fileOpeningService.preferredTextEditorURL(for: item.url) {

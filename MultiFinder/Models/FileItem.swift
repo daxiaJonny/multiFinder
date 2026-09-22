@@ -13,6 +13,7 @@ struct FileItem: Identifiable, Hashable, Sendable {
     let isHidden: Bool
     let isSymlink: Bool
     let isPackage: Bool
+    let isMetadataLoaded: Bool
 
     static let resourceKeys: Set<URLResourceKey> = [
         .isDirectoryKey, .fileSizeKey, .contentModificationDateKey,
@@ -23,6 +24,22 @@ struct FileItem: Identifiable, Hashable, Sendable {
         let standardizedURL = url.standardizedFileURL
         let values = try? standardizedURL.resourceValues(forKeys: Self.resourceKeys)
         self.init(url: standardizedURL, resourceValues: values)
+    }
+
+    /// Name-only row used for the first paint. Size, date, and folder-ness arrive in a later pass.
+    init(named name: String, in directory: URL) {
+        let url = directory.appendingPathComponent(name).standardizedFileURL
+        self.id = url
+        self.url = url
+        self.name = name
+        self.isDirectory = false
+        self.size = 0
+        self.modificationDate = .distantPast
+        self.kind = Self.fileKind(for: url.pathExtension)
+        self.isHidden = name.hasPrefix(".")
+        self.isSymlink = false
+        self.isPackage = false
+        self.isMetadataLoaded = false
     }
 
     // `values` is the only metadata source. Callers that already prefetched `resourceKeys` use this to avoid a second stat.
@@ -38,6 +55,7 @@ struct FileItem: Identifiable, Hashable, Sendable {
         self.isHidden = values?.isHidden ?? standardizedURL.lastPathComponent.hasPrefix(".")
         self.isSymlink = values?.isSymbolicLink ?? false
         self.isPackage = values?.isPackage ?? false
+        self.isMetadataLoaded = true
 
         if self.isDirectory {
             self.kind = self.isPackage ? Self.packageKind : Self.folderKind

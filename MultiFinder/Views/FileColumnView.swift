@@ -60,6 +60,7 @@ struct FileColumnView: View {
         return VirtualFileTable(
             items: viewModel.visibleItems,
             itemsRevision: viewModel.itemsRevision,
+            tableRevision: viewModel.tableRevision,
             selection: viewModel.selectedItems,
             sortOrder: viewModel.sortOrder,
             gitIndex: gitIndex,

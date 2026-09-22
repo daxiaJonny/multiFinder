@@ -6,19 +6,32 @@ struct ExternalOpenRequest: Equatable, Sendable {
     static let host = "open"
 
     let targetURL: URL
+    let opensInNewTab: Bool
 
     init?(url: URL) {
         guard let targetURL = Self.targetURL(from: url) else { return nil }
         self.targetURL = targetURL
+        let options = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+            .filter { $0.name.caseInsensitiveCompare("newTab") == .orderedSame } ?? []
+        if url.scheme?.lowercased() == Self.scheme {
+            guard options.count <= 1,
+                  options.allSatisfy({ $0.value == "true" || $0.value == "false" }) else { return nil }
+            self.opensInNewTab = options.first?.value == "true"
+        } else {
+            self.opensInNewTab = false
+        }
     }
 
-    static func url(for targetURL: URL) -> URL? {
+    static func url(for targetURL: URL, opensInNewTab: Bool = false) -> URL? {
         guard let localURL = Self.localFileURL(from: targetURL) else { return nil }
 
         var components = URLComponents()
         components.scheme = scheme
         components.host = host
         components.queryItems = [URLQueryItem(name: "path", value: localURL.path)]
+        if opensInNewTab {
+            components.queryItems?.append(URLQueryItem(name: "newTab", value: "true"))
+        }
         return components.url
     }
 
@@ -189,9 +202,22 @@ final class ExternalOpenRouter {
             window: window,
             isManagerBacked: true
         ) { [weak layoutManager] request in
-            _ = layoutManager?.openExternalPath(request.targetURL)
+            _ = layoutManager?.openExternalPaths([request.targetURL], inNewTab: request.opensInNewTab)
         } deliverBatch: { [weak layoutManager] requests in
-            _ = layoutManager?.openExternalPaths(requests.map(\.targetURL))
+            // Preserve ordinary file batches and the order of explicit new-tab requests.
+            var pending: [URL] = []
+            for request in requests {
+                if request.opensInNewTab {
+                    if !pending.isEmpty {
+                        _ = layoutManager?.openExternalPaths(pending)
+                        pending.removeAll()
+                    }
+                    _ = layoutManager?.openExternalPaths([request.targetURL], inNewTab: true)
+                } else {
+                    pending.append(request.targetURL)
+                }
+            }
+            if !pending.isEmpty { _ = layoutManager?.openExternalPaths(pending) }
         }
         registrations[registrationID] = registration
         managerRegistrationIDs[managerID] = registrationID
@@ -403,6 +429,6 @@ final class ExternalOpenRouter {
     }
 
     private static func requestKey(for request: ExternalOpenRequest) -> String {
-        request.targetURL.standardizedFileURL.absoluteString
+        (request.opensInNewTab ? "new-tab:" : "open:") + request.targetURL.standardizedFileURL.absoluteString
     }
 }

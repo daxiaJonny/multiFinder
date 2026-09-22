@@ -317,7 +317,7 @@ final class LayoutManager: ObservableObject {
     }
 
     @discardableResult
-    func openExternalPaths(_ urls: [URL]) -> Bool {
+    func openExternalPaths(_ urls: [URL], inNewTab: Bool = false) -> Bool {
         enum ExternalOpenAction {
             case package(URL)
             case directory(URL)
@@ -342,9 +342,9 @@ final class LayoutManager: ObservableObject {
             let isPackage = isDirectory.boolValue && (try? targetURL.resourceValues(
                 forKeys: [.isPackageKey]
             ).isPackage) == true
-            if isPackage {
+            if isPackage && !inNewTab {
                 actions.append(.package(targetURL))
-            } else if isDirectory.boolValue {
+            } else if isDirectory.boolValue && !isPackage {
                 actions.append(.directory(targetURL))
             } else {
                 let parentURL = targetURL.deletingLastPathComponent().standardizedFileURL
@@ -372,13 +372,35 @@ final class LayoutManager: ObservableObject {
                     )
                 }
             case .directory(let targetURL):
-                didOpenAny = openExternalDirectory(targetURL) || didOpenAny
+                didOpenAny = (inNewTab
+                    ? openExternalTab(at: targetURL)
+                    : openExternalDirectory(targetURL)) || didOpenAny
             case .files(let parentURL, let fileURLs):
-                didOpenAny = openExternalFiles(fileURLs, in: parentURL) || didOpenAny
+                didOpenAny = (inNewTab
+                    ? openExternalTab(at: parentURL, selecting: fileURLs)
+                    : openExternalFiles(fileURLs, in: parentURL)) || didOpenAny
             }
         }
 
         return didOpenAny
+    }
+
+    private func openExternalTab(at directory: URL, selecting files: [URL] = []) -> Bool {
+        guard let pane = focusedPaneID.flatMap({ findPane(id: $0) }) ?? allPanes.first else { return false }
+        let source = pane.selectedTab
+        let tab = FileBrowserViewModel(
+            location: .directory(directory),
+            sortField: source.sortField,
+            sortAscending: source.sortAscending,
+            viewMode: source.viewMode,
+            showHiddenFiles: source.showHiddenFiles
+        )
+        if !files.isEmpty { _ = tab.revealFiles(files) }
+        pane.tabs.insert(tab, at: pane.selectedTabIndex + 1)
+        pane.selectedTabIndex += 1
+        focusAndHighlight(pane)
+        save()
+        return true
     }
 
     @discardableResult

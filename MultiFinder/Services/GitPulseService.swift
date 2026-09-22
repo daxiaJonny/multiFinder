@@ -188,6 +188,13 @@ public final class GitPulseStore: ObservableObject {
             await MainActor.run {
                 self?.publish(tracked, for: key)
             }
+            // Let the folder paint before walking untracked files.
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            let stillCurrent = await MainActor.run { self?.inFlightPaths.contains(key) == true }
+            guard stillCurrent else {
+                await MainActor.run { self?.inFlightPaths.remove(key) }
+                return
+            }
             let full = await Self.queryGitStatus(
                 at: repoRoot,
                 relativePath: relativePath,

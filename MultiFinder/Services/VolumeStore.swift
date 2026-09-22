@@ -78,7 +78,8 @@ final class VolumeStore: ObservableObject {
         }
 
         var canEject: Bool {
-            isEjectable || isRemovable
+            !isRootFileSystem && url.standardizedFileURL.path != "/"
+                && (isEjectable || isRemovable || isNetwork)
         }
 
         var capacityDescription: String? {
@@ -213,7 +214,9 @@ final class VolumeStore: ObservableObject {
     }
 
     func eject(_ volume: MountedVolume) {
-        guard volume.canEject, !isEjecting(volume) else { return }
+        guard let mountedVolume = volumes.first(where: { $0.id == volume.id }),
+              mountedVolume.canEject, !isEjecting(mountedVolume) else { return }
+        let volume = mountedVolume
 
         let volumeID = volume.id
         ejectingVolumeIDs.insert(volumeID)
