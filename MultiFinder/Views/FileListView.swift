@@ -18,12 +18,9 @@ struct FileListView: View {
     let onCopyToAdjacentPane: ([URL]) -> Void
     let onMoveToAdjacentPane: ([URL]) -> Void
 
-    private var currentGitStatus: GitStatusInfo? {
-        gitPulse.status(for: viewModel.currentURL)
-    }
-
     var body: some View {
-        Table(
+        let gitIndex = gitPulse.changeIndex(for: viewModel.currentURL)
+        return Table(
             of: FileItem.self,
             selection: focusedSelection,
             sortOrder: focusedSortOrder
@@ -31,7 +28,7 @@ struct FileListView: View {
             TableColumn("Name", sortUsing: FileItemComparator(field: .name)) { item in
                 FileTableNameCell(
                     item: item,
-                    gitChange: GitChangeLookup.changeType(for: item.url, status: currentGitStatus),
+                    gitChange: gitIndex?.changeType(for: item.url),
                     renameState: inlineRenameState
                 )
             }

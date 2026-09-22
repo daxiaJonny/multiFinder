@@ -66,8 +66,9 @@ struct FileGridView: View {
                         alignment: .leading,
                         spacing: 14
                     ) {
+                        let gitIndex = gitPulse.changeIndex(for: viewModel.currentURL)
                         ForEach(viewModel.visibleItems) { item in
-                            gridCell(for: item)
+                            gridCell(for: item, gitIndex: gitIndex)
                                 .id(item.id)
                         }
                     }
@@ -190,17 +191,14 @@ struct FileGridView: View {
     }
 
     @ViewBuilder
-    private func gridCell(for item: FileItem) -> some View {
+    private func gridCell(for item: FileItem, gitIndex: GitChangeIndex?) -> some View {
         let contextSelection = selectionForContextMenu(for: item)
         let base = FileGridCell(
             item: item,
             thumbnailSize: Self.thumbnailSize,
             isSelected: viewModel.selectedItems.contains(item.id),
             isDropTargeted: dropTargetID == item.id,
-            gitChange: GitChangeLookup.changeType(
-                for: item.url,
-                status: gitPulse.status(for: viewModel.currentURL)
-            ),
+            gitChange: gitIndex?.changeType(for: item.url),
             isRenaming: inlineRenameItem?.id == item.id,
             renameText: Binding(
                 get: { inlineRenameDraft },

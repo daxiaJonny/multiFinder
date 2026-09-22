@@ -120,9 +120,9 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
 
     private var gitRestrictionIDs: Set<FileItem.ID>? {
         guard showsOnlyGitChanges, let currentURL else { return nil }
-        guard let status = GitPulseStore.shared.status(for: currentURL) else { return nil }
+        guard let index = GitPulseStore.shared.changeIndex(for: currentURL) else { return nil }
         return Set(items.compactMap { item in
-            GitChangeLookup.changeType(for: item.url, status: status) == nil ? nil : item.id
+            index.changeType(for: item.url) == nil ? nil : item.id
         })
     }
 

@@ -56,9 +56,10 @@ struct FileColumnView: View {
     }
 
     private var itemColumn: some View {
-        List(selection: focusedSelection) {
+        let gitIndex = gitPulse.changeIndex(for: viewModel.currentURL)
+        return List(selection: focusedSelection) {
             ForEach(viewModel.visibleItems) { item in
-                row(for: item)
+                row(for: item, gitIndex: gitIndex)
                     .tag(item.id)
             }
         }
@@ -138,14 +139,14 @@ struct FileColumnView: View {
     }
 
     @ViewBuilder
-    private func row(for item: FileItem) -> some View {
+    private func row(for item: FileItem, gitIndex: GitChangeIndex?) -> some View {
         let content = HStack(spacing: 7) {
             Image(nsImage: IconCache.shared.icon(for: item.url.path))
                 .resizable()
                 .interpolation(.high)
                 .frame(width: 18, height: 18)
 
-            if let gitChange = GitChangeLookup.changeType(for: item.url, status: gitPulse.status(for: viewModel.currentURL)) {
+            if let gitChange = gitIndex?.changeType(for: item.url) {
                 GitChangeBadge(change: gitChange)
             }
 

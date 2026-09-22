@@ -71,8 +71,9 @@ struct FileGalleryView: View {
         ScrollViewReader { scrollProxy in
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 8) {
+                    let gitIndex = gitPulse.changeIndex(for: viewModel.currentURL)
                     ForEach(viewModel.visibleItems) { item in
-                        galleryCell(for: item)
+                        galleryCell(for: item, gitIndex: gitIndex)
                             .id(item.id)
                     }
                 }
@@ -142,10 +143,10 @@ struct FileGalleryView: View {
     }
 
     @ViewBuilder
-    private func galleryCell(for item: FileItem) -> some View {
+    private func galleryCell(for item: FileItem, gitIndex: GitChangeIndex?) -> some View {
         if item.isDirectory && !item.isPackage {
             if FileDropSafety.canStartDragging(item) {
-                baseCell(for: item)
+                baseCell(for: item, gitIndex: gitIndex)
                     .onDrag { dragProvider(for: item) }
                     .dropDestination(
                         for: DroppedFileURL.self,
@@ -157,7 +158,7 @@ struct FileGalleryView: View {
                         }
                     )
             } else {
-                baseCell(for: item).dropDestination(
+                baseCell(for: item, gitIndex: gitIndex).dropDestination(
                     for: DroppedFileURL.self,
                     action: { droppedItems, _ in
                         transferDroppedItems(droppedItems, into: item.url)
@@ -168,19 +169,16 @@ struct FileGalleryView: View {
                 )
             }
         } else if FileDropSafety.canStartDragging(item) {
-            baseCell(for: item).onDrag { dragProvider(for: item) }
+            baseCell(for: item, gitIndex: gitIndex).onDrag { dragProvider(for: item) }
         } else {
-            baseCell(for: item)
+            baseCell(for: item, gitIndex: gitIndex)
         }
     }
 
-    private func baseCell(for item: FileItem) -> some View {
+    private func baseCell(for item: FileItem, gitIndex: GitChangeIndex?) -> some View {
         FileGalleryCell(
             item: item,
-            gitChange: GitChangeLookup.changeType(
-                for: item.url,
-                status: gitPulse.status(for: viewModel.currentURL)
-            ),
+            gitChange: gitIndex?.changeType(for: item.url),
             isSelected: viewModel.selectedItems.contains(item.id),
             isDropTargeted: dropTargetID == item.id,
             onSelect: { select(item, modifiers: $0) },

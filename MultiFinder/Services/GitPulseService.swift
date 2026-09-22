@@ -69,6 +69,8 @@ public final class GitPulseStore: ObservableObject {
     @Published public private(set) var cache: [String: GitStatusInfo] = [:]
     private var inFlightPaths: Set<String> = []
     private var nonRepoPaths: Set<String> = []
+    private var repoRootByDirectory: [String: URL] = [:]
+    private var changeIndexes: [String: GitChangeIndex] = [:]
     private var lastCheckTime: [String: Date] = [:]
 
     public init() {}
@@ -79,16 +81,23 @@ public final class GitPulseStore: ObservableObject {
         guard let repoRoot = findRepoRoot(for: url) else { return nil }
 
         let key = repoRoot.path
-        if let cached = cache[key] {
-            // Periodic background check if older than 5 seconds
-            if let lastTime = lastCheckTime[key], Date().timeIntervalSince(lastTime) > 5.0 {
-                refresh(for: repoRoot)
-            }
-            return cached
+        let isStale = lastCheckTime[key].map { Date().timeIntervalSince($0) > 5.0 } ?? true
+        if cache[key] == nil || isStale {
+            refresh(for: repoRoot)
         }
+        return cache[key]
+    }
 
-        refresh(for: repoRoot)
-        return nil
+    /// One index for the whole directory. Views must reuse it across rows.
+    func changeIndex(for url: URL?) -> GitChangeIndex? {
+        guard let status = status(for: url) else { return nil }
+        let key = status.repoRootURL.path
+        if let index = changeIndexes[key] {
+            return index
+        }
+        let index = GitChangeIndex(status: status)
+        changeIndexes[key] = index
+        return index
     }
 
     /// Explicitly refreshes the status for the given repository or child directory.
@@ -107,9 +116,10 @@ public final class GitPulseStore: ObservableObject {
             await MainActor.run {
                 guard let self = self else { return }
                 self.inFlightPaths.remove(key)
-                if let status = status {
-                    self.cache[key] = status
-                }
+                guard let status else { return }
+                guard self.cache[key] != status else { return }
+                self.cache[key] = status
+                self.changeIndexes[key] = GitChangeIndex(status: status)
             }
         }
     }
@@ -160,15 +170,24 @@ public final class GitPulseStore: ObservableObject {
 
     /// Traverses upwards to locate `.git` directory or file (for worktrees).
     public func findRepoRoot(for url: URL) -> URL? {
-        let path = url.standardizedFileURL.path
-        if nonRepoPaths.contains(path) {
+        let start = url.standardizedFileURL
+        if let cached = repoRootByDirectory[start.path] {
+            return cached
+        }
+        if nonRepoPaths.contains(start.path) {
             return nil
         }
 
-        var current = url.standardizedFileURL
+        var current = start
+        var visited: [URL] = []
         while current.path != "/" && current.pathComponents.count > 1 {
-            let gitPath = current.appendingPathComponent(".git").path
-            if FileManager.default.fileExists(atPath: gitPath) {
+            if let cached = repoRootByDirectory[current.path] {
+                rememberRepoRoot(cached, for: visited)
+                return cached
+            }
+            visited.append(current)
+            if FileManager.default.fileExists(atPath: current.appendingPathComponent(".git").path) {
+                rememberRepoRoot(current, for: visited)
                 return current
             }
             let parent = current.deletingLastPathComponent()
@@ -176,8 +195,16 @@ public final class GitPulseStore: ObservableObject {
             current = parent
         }
 
-        nonRepoPaths.insert(path)
+        for directory in visited {
+            nonRepoPaths.insert(directory.path)
+        }
         return nil
+    }
+
+    private func rememberRepoRoot(_ root: URL, for directories: [URL]) {
+        for directory in directories {
+            repoRootByDirectory[directory.path] = root
+        }
     }
 
     // MARK: - Background Worker
@@ -298,23 +325,56 @@ public final class GitPulseStore: ObservableObject {
     }
 }
 
+struct GitChangeIndex: Equatable {
+    private let repoRoot: URL
+    private let exact: [String: GitFileChange.ChangeType]
+    private let containers: [String: GitFileChange.ChangeType]
+
+    init(status: GitStatusInfo) {
+        repoRoot = status.repoRootURL
+        var exact: [String: GitFileChange.ChangeType] = [:]
+        var containers: [String: GitFileChange.ChangeType] = [:]
+        exact.reserveCapacity(status.changedFiles.count)
+        for change in status.changedFiles {
+            let path = GitChangeLookup.normalizedPath(change.path)
+            guard !path.isEmpty else { continue }
+            exact[path] = GitChangeLookup.preferred(existing: exact[path], candidate: change.type)
+            var parent = (path as NSString).deletingLastPathComponent
+            while parent != ".", !parent.isEmpty {
+                containers[parent] = GitChangeLookup.preferred(existing: containers[parent], candidate: change.type)
+                let next = (parent as NSString).deletingLastPathComponent
+                if next == parent { break }
+                parent = next
+            }
+        }
+        self.exact = exact
+        self.containers = containers
+    }
+
+    func changeType(for itemURL: URL) -> GitFileChange.ChangeType? {
+        guard let relative = GitChangeLookup.relativePath(of: itemURL, to: repoRoot), !relative.isEmpty else {
+            return nil
+        }
+        if let match = exact[relative] {
+            return match
+        }
+        var parent = (relative as NSString).deletingLastPathComponent
+        while parent != ".", !parent.isEmpty {
+            if let match = exact[parent] {
+                return match
+            }
+            let next = (parent as NSString).deletingLastPathComponent
+            if next == parent { break }
+            parent = next
+        }
+        return containers[relative]
+    }
+}
+
 enum GitChangeLookup {
     static func changeType(for itemURL: URL, status: GitStatusInfo?) -> GitFileChange.ChangeType? {
         guard let status else { return nil }
-        guard let relative = relativePath(of: itemURL, to: status.repoRootURL) else { return nil }
-        guard !relative.isEmpty else { return nil }
-
-        var matched: [GitFileChange.ChangeType] = []
-        for change in status.changedFiles {
-            let path = normalizedPath(change.path)
-            guard !path.isEmpty else { continue }
-            if path == relative
-                || path.hasPrefix(relative + "/")
-                || relative.hasPrefix(path + "/") {
-                matched.append(change.type)
-            }
-        }
-        return preferred(matched)
+        return GitChangeIndex(status: status).changeType(for: itemURL)
     }
 
     static func normalizedPath(_ raw: String) -> String {
@@ -343,11 +403,14 @@ enum GitChangeLookup {
         return String(item.path.dropFirst(prefix.count))
     }
 
-    private static func preferred(_ types: [GitFileChange.ChangeType]) -> GitFileChange.ChangeType? {
+    static func preferred(
+        existing: GitFileChange.ChangeType?,
+        candidate: GitFileChange.ChangeType
+    ) -> GitFileChange.ChangeType {
+        guard let existing else { return candidate }
         let rank: [GitFileChange.ChangeType] = [.modified, .added, .renamed, .deleted, .untracked, .other]
-        for type in rank where types.contains(type) {
-            return type
-        }
-        return nil
+        let existingRank = rank.firstIndex(of: existing) ?? rank.count
+        let candidateRank = rank.firstIndex(of: candidate) ?? rank.count
+        return candidateRank < existingRank ? candidate : existing
     }
 }
