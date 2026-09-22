@@ -9,6 +9,37 @@ enum FileConflictResolution: String, Sendable {
     case cancel
 }
 
+enum NewFileTemplate: String, CaseIterable, Sendable {
+    case text
+    case markdown
+    case json
+
+    var fileExtension: String {
+        switch self {
+        case .text: return "txt"
+        case .markdown: return "md"
+        case .json: return "json"
+        }
+    }
+
+    var baseName: String { L10n.string("untitled") }
+
+    var contents: String {
+        switch self {
+        case .text, .markdown: return ""
+        case .json: return "{}\n"
+        }
+    }
+
+    var menuTitle: String {
+        switch self {
+        case .text: return L10n.string("Text File")
+        case .markdown: return L10n.string("Markdown File")
+        case .json: return L10n.string("JSON File")
+        }
+    }
+}
+
 enum FileConflictPolicy: String, Sendable {
     case ask
     case replace
@@ -22,6 +53,7 @@ enum FileOperationKind: String, Sendable {
     case trash = "Move to Trash"
     case rename = "Rename"
     case createFolder = "New Folder"
+    case createFile = "New File"
     case batchRename = "Batch Rename"
     case compress = "Compress"
     case extract = "Extract"
@@ -34,6 +66,7 @@ enum FileOperationKind: String, Sendable {
         case .trash: return L10n.string("Move to Trash")
         case .rename: return L10n.string("Rename")
         case .createFolder: return L10n.string("New Folder")
+        case .createFile: return L10n.string("New File")
         case .batchRename: return L10n.string("Batch Rename")
         case .compress: return L10n.string("Compress")
         case .extract: return L10n.string("Extract")
@@ -149,6 +182,7 @@ fileprivate enum FileOperationRequest: Sendable {
     case trash(urls: [URL])
     case rename(source: URL, destination: URL, policy: FileConflictPolicy)
     case createFolder(parent: URL, baseName: String)
+    case createFile(parent: URL, baseName: String, fileExtension: String, contents: String)
     case batchRename(pairs: [BatchRenamePair])
     case compress(sources: [URL])
     case extract(archives: [URL])
@@ -161,6 +195,7 @@ fileprivate enum FileOperationRequest: Sendable {
         case .trash: return .trash
         case .rename: return .rename
         case .createFolder: return .createFolder
+        case .createFile: return .createFile
         case .batchRename: return .batchRename
         case .compress: return .compress
         case .extract: return .extract
@@ -172,7 +207,7 @@ fileprivate enum FileOperationRequest: Sendable {
         switch self {
         case .copy(let sources, _, _), .move(let sources, _, _): return sources.count
         case .trash(let urls): return urls.count
-        case .rename, .createFolder: return 1
+        case .rename, .createFolder, .createFile: return 1
         case .batchRename(let pairs): return pairs.count
         case .compress(let sources): return sources.isEmpty ? 0 : 1
         case .extract(let archives): return archives.count
@@ -198,7 +233,7 @@ fileprivate enum FileOperationRequest: Sendable {
         case .trash(let urls):
             let failed = urls.filter { failedSources.contains($0.standardizedFileURL) }
             return failed.isEmpty ? nil : .trash(urls: failed)
-        case .rename, .createFolder, .compress:
+        case .rename, .createFolder, .createFile, .compress:
             return self
         case .batchRename(let pairs):
             let failed = pairs.filter { failedSources.contains($0.source.standardizedFileURL) }
@@ -409,6 +444,22 @@ final class FileOperationService: ObservableObject {
         completion: ((FileOperationResult) -> Void)? = nil
     ) {
         enqueue(.createFolder(parent: parent, baseName: baseName), completion: completion)
+    }
+
+    func createFileDetailed(
+        in parent: URL,
+        template: NewFileTemplate,
+        completion: ((FileOperationResult) -> Void)? = nil
+    ) {
+        enqueue(
+            .createFile(
+                parent: parent,
+                baseName: template.baseName,
+                fileExtension: template.fileExtension,
+                contents: template.contents
+            ),
+            completion: completion
+        )
     }
 
     func batchRenameDetailed(
@@ -649,6 +700,13 @@ final class FileOperationService: ObservableObject {
             return await executeRename(source, to: destination, policy: policy)
         case .createFolder(let parent, let baseName):
             return await executeCreateFolder(in: parent, baseName: baseName)
+        case .createFile(let parent, let baseName, let fileExtension, let contents):
+            return await executeCreateFile(
+                in: parent,
+                baseName: baseName,
+                fileExtension: fileExtension,
+                contents: contents
+            )
         case .batchRename(let pairs):
             return await executeBatchRename(pairs)
         case .compress(let sources):
@@ -700,7 +758,7 @@ final class FileOperationService: ObservableObject {
                     continue
                 }
             }
-        case .trash, .rename, .createFolder, .batchRename, .compress, .extract:
+        case .trash, .rename, .createFolder, .createFile, .batchRename, .compress, .extract:
             return
         }
     }
@@ -936,6 +994,54 @@ final class FileOperationService: ObservableObject {
         do {
             try Task.checkCancellation()
             let change = try await Self.createUniqueFolder(in: parent, baseName: baseName)
+            updateProgress(1)
+            return Self.executionResult(
+                changes: [change],
+                outcomes: [FileItemOperationOutcome(
+                    source: parent,
+                    destination: change.currentURL,
+                    status: .completed,
+                    errorMessage: nil
+                )]
+            )
+        } catch is CancellationError {
+            return Self.executionResult(
+                changes: [],
+                outcomes: [FileItemOperationOutcome(
+                    source: parent,
+                    destination: nil,
+                    status: .cancelled,
+                    errorMessage: L10n.string("The operation was cancelled.")
+                )],
+                wasCancelled: true
+            )
+        } catch {
+            return Self.executionResult(
+                changes: [],
+                outcomes: [FileItemOperationOutcome(
+                    source: parent,
+                    destination: nil,
+                    status: .failed,
+                    errorMessage: error.localizedDescription
+                )]
+            )
+        }
+    }
+
+    private func executeCreateFile(
+        in parent: URL,
+        baseName: String,
+        fileExtension: String,
+        contents: String
+    ) async -> ExecutionResult {
+        do {
+            try Task.checkCancellation()
+            let change = try await Self.createUniqueFile(
+                in: parent,
+                baseName: baseName,
+                fileExtension: fileExtension,
+                contents: contents
+            )
             updateProgress(1)
             return Self.executionResult(
                 changes: [change],
@@ -1369,7 +1475,7 @@ final class FileOperationService: ObservableObject {
                     volumeIdentifierProvider: volumeIdentifierProvider,
                     fileManager: fileManager
                 )
-            case .trash, .createFolder, .batchRename, .compress, .extract, .aiOrganize:
+            case .trash, .createFolder, .createFile, .batchRename, .compress, .extract, .aiOrganize:
                 preconditionFailure("Unsupported transfer kind")
             }
         }
@@ -1411,6 +1517,47 @@ final class FileOperationService: ObservableObject {
             try fileManager.createDirectory(at: destination, withIntermediateDirectories: false)
             return .created(destination, identity: try fileIdentity(at: destination))
         }
+    }
+
+    private nonisolated static func createUniqueFile(
+        in parent: URL,
+        baseName: String,
+        fileExtension: String,
+        contents: String
+    ) async throws -> FileOperationChange {
+        try await runWorker {
+            let fileManager = FileManager.default
+            var counter: Int?
+            var destination = uniqueFileURL(
+                in: parent,
+                baseName: baseName,
+                fileExtension: fileExtension,
+                counter: counter
+            )
+            while fileManager.fileExists(atPath: destination.path) {
+                try Task.checkCancellation()
+                counter = (counter ?? 1) + 1
+                destination = uniqueFileURL(
+                    in: parent,
+                    baseName: baseName,
+                    fileExtension: fileExtension,
+                    counter: counter
+                )
+            }
+            try Task.checkCancellation()
+            try Data(contents.utf8).write(to: destination, options: .withoutOverwriting)
+            return .created(destination, identity: try fileIdentity(at: destination))
+        }
+    }
+
+    nonisolated static func uniqueFileURL(
+        in parent: URL,
+        baseName: String,
+        fileExtension: String,
+        counter: Int?
+    ) -> URL {
+        let stem = counter.map { "\(baseName) \($0)" } ?? baseName
+        return parent.appendingPathComponent(stem).appendingPathExtension(fileExtension)
     }
 
     private nonisolated static func renameItem(_ source: URL, to destination: URL) async throws -> FileOperationChange {

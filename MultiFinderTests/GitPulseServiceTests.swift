@@ -79,4 +79,47 @@ final class GitPulseServiceTests: XCTestCase {
         XCTAssertEqual(commits[0].author, "TestUser")
         XCTAssertFalse(commits[0].hash.isEmpty)
     }
+
+    func testGitChangeLookupMatchesFilesDirectoriesQuotesAndRenames() {
+        let root = URL(fileURLWithPath: "/repo", isDirectory: true)
+        let status = GitStatusInfo(
+            repoRootURL: root,
+            branch: "main",
+            upstream: nil,
+            aheadCount: 0,
+            behindCount: 0,
+            modifiedCount: 1,
+            untrackedCount: 2,
+            stagedCount: 0,
+            changedFiles: [
+                GitFileChange(path: "src/main.swift", type: .modified),
+                GitFileChange(path: "\"docs/my notes.md\"", type: .untracked),
+                GitFileChange(path: "old.txt -> new.txt", type: .renamed),
+                GitFileChange(path: "vendor/", type: .untracked)
+            ]
+        )
+
+        XCTAssertEqual(
+            GitChangeLookup.changeType(for: URL(fileURLWithPath: "/repo/src/main.swift"), status: status),
+            .modified
+        )
+        XCTAssertEqual(
+            GitChangeLookup.changeType(for: URL(fileURLWithPath: "/repo/src", isDirectory: true), status: status),
+            .modified
+        )
+        XCTAssertEqual(
+            GitChangeLookup.changeType(for: URL(fileURLWithPath: "/repo/docs/my notes.md"), status: status),
+            .untracked
+        )
+        XCTAssertEqual(
+            GitChangeLookup.changeType(for: URL(fileURLWithPath: "/repo/new.txt"), status: status),
+            .renamed
+        )
+        XCTAssertEqual(
+            GitChangeLookup.changeType(for: URL(fileURLWithPath: "/repo/vendor/lib.js"), status: status),
+            .untracked
+        )
+        XCTAssertNil(GitChangeLookup.changeType(for: URL(fileURLWithPath: "/repo/README.md"), status: status))
+        XCTAssertNil(GitChangeLookup.changeType(for: URL(fileURLWithPath: "/other/src/main.swift"), status: status))
+    }
 }

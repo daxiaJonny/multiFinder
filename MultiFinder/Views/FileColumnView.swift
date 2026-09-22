@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 struct FileColumnView: View {
     @ObservedObject var viewModel: FileBrowserViewModel
+    @ObservedObject private var gitPulse = GitPulseStore.shared
 
     let canTransferToAdjacentPane: ([URL], FileDropOperation) -> Bool
     let onFocus: () -> Void
@@ -143,6 +144,10 @@ struct FileColumnView: View {
                 .resizable()
                 .interpolation(.high)
                 .frame(width: 18, height: 18)
+
+            if let gitChange = GitChangeLookup.changeType(for: item.url, status: gitPulse.status(for: viewModel.currentURL)) {
+                GitChangeBadge(change: gitChange)
+            }
 
             Text(item.name)
                 .lineLimit(1)
@@ -442,6 +447,20 @@ struct FinderThumbnailView: View {
     }
 }
 
+struct CopyPathMenu: View {
+    let urls: [URL]
+
+    var body: some View {
+        Menu("Copy Path") {
+            Button("Absolute Path") { PathClipboard.copy(urls, style: .absolute) }
+            Button("Path from Home") { PathClipboard.copy(urls, style: .homeRelative) }
+            Button("File URL") { PathClipboard.copy(urls, style: .fileURL) }
+            Button("File Name") { PathClipboard.copy(urls, style: .name) }
+        }
+        .disabled(urls.isEmpty)
+    }
+}
+
 struct FinderItemsContextMenu: View {
     @ObservedObject var viewModel: FileBrowserViewModel
     @ObservedObject private var clipboard = FileClipboard.shared
@@ -498,6 +517,8 @@ struct FinderItemsContextMenu: View {
                 clipboard.copy(urls: selectedURLs)
             }
             .disabled(selectedItems.isEmpty)
+
+            CopyPathMenu(urls: selectedURLs)
 
             Button("Cut") {
                 prepareSelection()

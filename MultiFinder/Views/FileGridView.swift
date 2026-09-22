@@ -6,6 +6,7 @@ fileprivate let fileGridCoordinateSpaceName = "MultiFinder.FileGrid"
 struct FileGridView: View {
     @ObservedObject var viewModel: FileBrowserViewModel
     @ObservedObject private var clipboard: FileClipboard
+    @ObservedObject private var gitPulse = GitPulseStore.shared
 
     let canTransferToAdjacentPane: ([URL], FileDropOperation) -> Bool
     let onFocus: () -> Void
@@ -196,6 +197,10 @@ struct FileGridView: View {
             thumbnailSize: Self.thumbnailSize,
             isSelected: viewModel.selectedItems.contains(item.id),
             isDropTargeted: dropTargetID == item.id,
+            gitChange: GitChangeLookup.changeType(
+                for: item.url,
+                status: gitPulse.status(for: viewModel.currentURL)
+            ),
             isRenaming: inlineRenameItem?.id == item.id,
             renameText: Binding(
                 get: { inlineRenameDraft },
@@ -701,6 +706,8 @@ struct FileGridView: View {
         }
         .disabled(selectedItems.isEmpty)
 
+        CopyPathMenu(urls: selectedItems.map(\.url))
+
         Button("Cut") {
             focusGrid()
             viewModel.selectForContextMenu(selection)
@@ -944,6 +951,7 @@ private struct FileGridCell: View {
     let thumbnailSize: CGSize
     let isSelected: Bool
     let isDropTargeted: Bool
+    let gitChange: GitFileChange.ChangeType?
     let isRenaming: Bool
     @Binding var renameText: String
     let onSelect: (EventModifiers) -> Void
@@ -975,12 +983,17 @@ private struct FileGridCell: View {
                 )
                 .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30, alignment: .top)
             } else {
-                Text(item.name)
-                    .font(.system(size: 11))
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30, alignment: .top)
+                HStack(spacing: 3) {
+                    if let gitChange {
+                        GitChangeBadge(change: gitChange)
+                    }
+                    Text(item.name)
+                        .font(.system(size: 11))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                }
+                .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30, alignment: .top)
             }
         }
         .padding(.horizontal, 4)

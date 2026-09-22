@@ -848,6 +848,29 @@ final class FileBrowserViewModelTests: XCTestCase {
         )
     }
 
+    func testVisibleItemsAppliesNameFilterAndGitRestrictionTogether() {
+        let changed = FileItem(url: URL(fileURLWithPath: "/tmp/changed.txt"))
+        let other = FileItem(url: URL(fileURLWithPath: "/tmp/other.txt"))
+        let alsoChanged = FileItem(url: URL(fileURLWithPath: "/tmp/changed-notes.md"))
+
+        XCTAssertEqual(
+            FileBrowserViewModel.visibleItems(
+                in: [other, changed, alsoChanged],
+                filterText: "",
+                restrictingTo: [changed.id, alsoChanged.id]
+            ).map(\.name),
+            ["changed.txt", "changed-notes.md"]
+        )
+        XCTAssertEqual(
+            FileBrowserViewModel.visibleItems(
+                in: [other, changed, alsoChanged],
+                filterText: "notes",
+                restrictingTo: [changed.id, alsoChanged.id]
+            ).map(\.name),
+            ["changed-notes.md"]
+        )
+    }
+
     func testMultiFileDragPayloadRoundTripsAllFileURLs() throws {
         let urls = [
             temporaryDirectory.appendingPathComponent("first.txt"),

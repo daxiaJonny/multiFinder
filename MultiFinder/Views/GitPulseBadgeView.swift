@@ -1,5 +1,51 @@
 import SwiftUI
 
+struct GitChangeBadge: View {
+    let change: GitFileChange.ChangeType
+
+    var body: some View {
+        Text(symbol)
+            .font(.system(size: 9, weight: .bold, design: .rounded))
+            .foregroundStyle(color)
+            .frame(width: 14, height: 14)
+            .background(color.opacity(0.16), in: Circle())
+            .help(helpText)
+            .accessibilityLabel(helpText)
+    }
+
+    private var symbol: String {
+        switch change {
+        case .modified: return "M"
+        case .added: return "A"
+        case .deleted: return "D"
+        case .renamed: return "R"
+        case .untracked: return "?"
+        case .other: return "•"
+        }
+    }
+
+    private var color: Color {
+        switch change {
+        case .modified: return .orange
+        case .added: return .green
+        case .deleted: return .red
+        case .renamed: return .blue
+        case .untracked, .other: return .secondary
+        }
+    }
+
+    private var helpText: String {
+        switch change {
+        case .modified: return L10n.string("Modified in Git")
+        case .added: return L10n.string("Added in Git")
+        case .deleted: return L10n.string("Deleted in Git")
+        case .renamed: return L10n.string("Renamed in Git")
+        case .untracked: return L10n.string("Untracked in Git")
+        case .other: return L10n.string("Changed in Git")
+        }
+    }
+}
+
 /// Compact Git branch capsule rendered in PathBarView breadcrumb bar.
 struct GitPulseBadgeView: View {
     let status: GitStatusInfo

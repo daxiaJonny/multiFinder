@@ -61,6 +61,46 @@ final class FileClipboardTests: XCTestCase {
         XCTAssertEqual(pasteboard.string(forType: .string), "new clipboard value")
     }
 
+    func testPathClipboardFormatsAbsoluteHomeFileURLAndName() {
+        let home = URL(fileURLWithPath: "/Users/test", isDirectory: true)
+        let file = URL(fileURLWithPath: "/Users/test/Projects/报告.txt")
+        let outside = URL(fileURLWithPath: "/tmp/报告.txt")
+
+        XCTAssertEqual(
+            PathClipboard.string(for: file, style: .absolute, homeDirectory: home),
+            "/Users/test/Projects/报告.txt"
+        )
+        XCTAssertEqual(
+            PathClipboard.string(for: file, style: .homeRelative, homeDirectory: home),
+            "~/Projects/报告.txt"
+        )
+        XCTAssertEqual(
+            PathClipboard.string(for: home, style: .homeRelative, homeDirectory: home),
+            "~"
+        )
+        XCTAssertEqual(
+            PathClipboard.string(for: outside, style: .homeRelative, homeDirectory: home),
+            "/tmp/报告.txt"
+        )
+        XCTAssertEqual(
+            PathClipboard.string(for: file, style: .name, homeDirectory: home),
+            "报告.txt"
+        )
+        XCTAssertTrue(
+            PathClipboard.string(for: file, style: .fileURL, homeDirectory: home).hasPrefix("file://")
+        )
+        XCTAssertEqual(
+            PathClipboard.text(for: [file, outside], style: .name, homeDirectory: home),
+            "报告.txt\n报告.txt"
+        )
+    }
+
+    func testPathClipboardWritesSelectedStyleToPasteboard() {
+        let file = URL(fileURLWithPath: "/Users/test/Notes.md")
+        PathClipboard.copy([file], style: .name, pasteboard: pasteboard)
+        XCTAssertEqual(pasteboard.string(forType: .string), "Notes.md")
+    }
+
     func testPartialConsumptionKeepsRemainingCutURLs() throws {
         let first = try makeFile("first.txt")
         let second = try makeFile("second.txt")

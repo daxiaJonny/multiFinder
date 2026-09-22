@@ -1,6 +1,56 @@
 import AppKit
 import Combine
 
+enum PathClipboard {
+    enum Style: Equatable, Sendable {
+        case absolute
+        case homeRelative
+        case fileURL
+        case name
+    }
+
+    static func text(
+        for urls: [URL],
+        style: Style,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> String {
+        urls.map { string(for: $0, style: style, homeDirectory: homeDirectory) }
+            .joined(separator: "\n")
+    }
+
+    static func string(for url: URL, style: Style, homeDirectory: URL) -> String {
+        let file = url.standardizedFileURL
+        switch style {
+        case .absolute:
+            return file.path
+        case .homeRelative:
+            let home = homeDirectory.standardizedFileURL
+            if file == home { return "~" }
+            let prefix = home.path.hasSuffix("/") ? home.path : home.path + "/"
+            if file.path.hasPrefix(prefix) {
+                return "~/" + file.path.dropFirst(prefix.count)
+            }
+            return file.path
+        case .fileURL:
+            return file.absoluteString
+        case .name:
+            return file.lastPathComponent
+        }
+    }
+
+    @MainActor
+    static func copy(
+        _ urls: [URL],
+        style: Style,
+        pasteboard: NSPasteboard = .general
+    ) {
+        let value = text(for: urls, style: style)
+        guard !value.isEmpty else { return }
+        pasteboard.clearContents()
+        pasteboard.setString(value, forType: .string)
+    }
+}
+
 struct FileClipboardPayload {
     let urls: [URL]
     let isCut: Bool

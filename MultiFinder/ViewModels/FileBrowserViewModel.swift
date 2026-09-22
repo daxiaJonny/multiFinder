@@ -43,6 +43,12 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
             }
         }
     }
+    @Published var showsOnlyGitChanges = false {
+        didSet {
+            guard oldValue != showsOnlyGitChanges else { return }
+            applyGitChangeFilter()
+        }
+    }
     @Published var sortOrder: [FileItemComparator] {
         didSet {
             guard let comparator = sortOrder.first else { return }
@@ -105,7 +111,19 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     }
 
     var visibleItems: [FileItem] {
-        Self.visibleItems(in: items, filterText: filterText)
+        Self.visibleItems(
+            in: items,
+            filterText: filterText,
+            restrictingTo: gitRestrictionIDs
+        )
+    }
+
+    private var gitRestrictionIDs: Set<FileItem.ID>? {
+        guard showsOnlyGitChanges, let currentURL else { return nil }
+        guard let status = GitPulseStore.shared.status(for: currentURL) else { return nil }
+        return Set(items.compactMap { item in
+            GitChangeLookup.changeType(for: item.url, status: status) == nil ? nil : item.id
+        })
     }
 
     var isFiltering: Bool {
@@ -128,6 +146,8 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     private var settingsCancellable: AnyCancellable?
     private var loadGeneration: UInt64 = 0
     private var pendingSelectionURLs: Set<URL> = []
+    private var gitStatusCancellable: AnyCancellable?
+    private var lastGitFilteredIDs: Set<FileItem.ID> = []
 
     init(
         location: BrowserLocation = .directory(FileManager.default.homeDirectoryForCurrentUser),
@@ -165,6 +185,11 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
                 }
         }
         configureDirectoryMonitor()
+        gitStatusCancellable = GitPulseStore.shared.$cache
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.refreshGitChangeFilter()
+            }
         reload()
     }
 
@@ -322,22 +347,49 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     }
 
     private func visibleItemIDs(in items: [FileItem], filterText: String) -> Set<FileItem.ID> {
-        Set(Self.visibleItems(in: items, filterText: filterText).map(\.id))
+        Set(Self.visibleItems(
+            in: items,
+            filterText: filterText,
+            restrictingTo: gitRestrictionIDs
+        ).map(\.id))
     }
 
-    private nonisolated static func visibleItems(
+    private func applyGitChangeFilter() {
+        let visible = visibleItemIDs(in: items, filterText: filterText)
+        selectedItems.formIntersection(visible)
+        lastGitFilteredIDs = visible
+        tableRevision &+= 1
+    }
+
+    private func refreshGitChangeFilter() {
+        guard showsOnlyGitChanges else { return }
+        let visible = visibleItemIDs(in: items, filterText: filterText)
+        guard visible != lastGitFilteredIDs || !selectedItems.isSubset(of: visible) else { return }
+        selectedItems.formIntersection(visible)
+        lastGitFilteredIDs = visible
+        tableRevision &+= 1
+    }
+
+    nonisolated static func visibleItems(
         in items: [FileItem],
-        filterText: String
+        filterText: String,
+        restrictingTo allowedIDs: Set<FileItem.ID>? = nil
     ) -> [FileItem] {
         let query = filterText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return items }
-        return items.filter { item in
-            item.name.range(
-                of: query,
-                options: [.caseInsensitive, .diacriticInsensitive],
-                locale: .current
-            ) != nil
+        let nameFiltered: [FileItem]
+        if query.isEmpty {
+            nameFiltered = items
+        } else {
+            nameFiltered = items.filter { item in
+                item.name.range(
+                    of: query,
+                    options: [.caseInsensitive, .diacriticInsensitive],
+                    locale: .current
+                ) != nil
+            }
         }
+        guard let allowedIDs else { return nameFiltered }
+        return nameFiltered.filter { allowedIDs.contains($0.id) }
     }
 
     private nonisolated static func loadAISearch(
@@ -725,6 +777,16 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
             return
         }
         operationService.createFolderDetailed(in: destination) { [weak self] result in
+            self?.finishOperation(result, selectingCompletedDestinations: true)
+        }
+    }
+
+    func createFile(_ template: NewFileTemplate) {
+        guard let destination = currentURL else {
+            errorMessage = L10n.string("New files can only be created inside a folder.")
+            return
+        }
+        operationService.createFileDetailed(in: destination, template: template) { [weak self] result in
             self?.finishOperation(result, selectingCompletedDestinations: true)
         }
     }

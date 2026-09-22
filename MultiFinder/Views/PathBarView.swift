@@ -119,6 +119,24 @@ struct PathBarView: View {
                let gitStatus = gitPulseStore.status(for: currentURL) {
                 GitPulseBadgeView(status: gitStatus, isCompact: headerWidth < 340, onFocus: onFocus)
                     .fixedSize()
+
+                Button {
+                    onFocus()
+                    viewModel.showsOnlyGitChanges.toggle()
+                } label: {
+                    Image(
+                        systemName: viewModel.showsOnlyGitChanges
+                            ? "line.3.horizontal.decrease.circle.fill"
+                            : "line.3.horizontal.decrease.circle"
+                    )
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(viewModel.showsOnlyGitChanges ? MFDTheme.primaryAccent : .secondary)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(gitStatus.isClean && !viewModel.showsOnlyGitChanges)
+                .help(L10n.string("Show Git Changes Only"))
             }
 
             Spacer(minLength: 2)

@@ -3,6 +3,7 @@ import SwiftUI
 
 struct FileGalleryView: View {
     @ObservedObject var viewModel: FileBrowserViewModel
+    @ObservedObject private var gitPulse = GitPulseStore.shared
 
     let canTransferToAdjacentPane: ([URL], FileDropOperation) -> Bool
     let onFocus: () -> Void
@@ -176,6 +177,10 @@ struct FileGalleryView: View {
     private func baseCell(for item: FileItem) -> some View {
         FileGalleryCell(
             item: item,
+            gitChange: GitChangeLookup.changeType(
+                for: item.url,
+                status: gitPulse.status(for: viewModel.currentURL)
+            ),
             isSelected: viewModel.selectedItems.contains(item.id),
             isDropTargeted: dropTargetID == item.id,
             onSelect: { select(item, modifiers: $0) },
@@ -327,6 +332,7 @@ struct FileGalleryView: View {
 
 private struct FileGalleryCell: View {
     let item: FileItem
+    let gitChange: GitFileChange.ChangeType?
     let isSelected: Bool
     let isDropTargeted: Bool
     let onSelect: (EventModifiers) -> Void
@@ -359,13 +365,18 @@ private struct FileGalleryCell: View {
         VStack(spacing: 5) {
             thumbnail
 
-            Text(item.name)
-                .font(.system(size: 10))
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .truncationMode(.middle)
-                .frame(width: 92)
-                .frame(minHeight: 25, maxHeight: 25, alignment: .top)
+            HStack(spacing: 3) {
+                if let gitChange {
+                    GitChangeBadge(change: gitChange)
+                }
+                Text(item.name)
+                    .font(.system(size: 10))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+            }
+            .frame(width: 92)
+            .frame(minHeight: 25, maxHeight: 25, alignment: .top)
         }
     }
 

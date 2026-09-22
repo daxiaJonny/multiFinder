@@ -73,6 +73,22 @@ struct MultiFinderApp: App {
                 .keyboardShortcut("n", modifiers: [.command, .shift])
                 .disabled(layoutManager?.focusedPane?.canCreateItems != true)
 
+                Menu("New File") {
+                    Button(NewFileTemplate.text.menuTitle) {
+                        layoutManager?.focusedPane?.createFile(.text)
+                    }
+                    .keyboardShortcut("n", modifiers: [.command, .option])
+
+                    Button(NewFileTemplate.markdown.menuTitle) {
+                        layoutManager?.focusedPane?.createFile(.markdown)
+                    }
+
+                    Button(NewFileTemplate.json.menuTitle) {
+                        layoutManager?.focusedPane?.createFile(.json)
+                    }
+                }
+                .disabled(layoutManager?.focusedPane?.canCreateItems != true)
+
                 Divider()
 
                 Button("Get Info") {
@@ -156,6 +172,25 @@ struct MultiFinderApp: App {
                 }
                 .keyboardShortcut("c", modifiers: .command)
 
+                Button("Copy Path") {
+                    copySelectedPaths(.absolute)
+                }
+                .keyboardShortcut("c", modifiers: [.command, .option])
+                .disabled(layoutManager?.focusedPane?.selectedItems.isEmpty ?? true)
+
+                Menu("Copy Path As") {
+                    Button("Path from Home") {
+                        copySelectedPaths(.homeRelative)
+                    }
+                    Button("File URL") {
+                        copySelectedPaths(.fileURL)
+                    }
+                    Button("File Name") {
+                        copySelectedPaths(.name)
+                    }
+                }
+                .disabled(layoutManager?.focusedPane?.selectedItems.isEmpty ?? true)
+
                 Button("Paste") {
                     paste()
                 }
@@ -188,6 +223,12 @@ struct MultiFinderApp: App {
                 }
                 .keyboardShortcut(".", modifiers: [.command, .shift])
                 .disabled(layoutManager == nil)
+
+                Button("Show Git Changes Only") {
+                    layoutManager?.focusedPane?.showsOnlyGitChanges.toggle()
+                }
+                .keyboardShortcut("g", modifiers: [.command, .option])
+                .disabled(layoutManager?.focusedPane?.currentURL == nil)
 
                 Divider()
 
@@ -561,6 +602,11 @@ struct MultiFinderApp: App {
         guard !TextEditingCommandRouter.perform(#selector(NSText.copy(_:))) else { return }
         guard let urls = layoutManager?.focusedPane?.selectedItemURLs, !urls.isEmpty else { return }
         clipboard.copy(urls: urls)
+    }
+
+    private func copySelectedPaths(_ style: PathClipboard.Style) {
+        guard let urls = layoutManager?.focusedPane?.selectedItemURLs, !urls.isEmpty else { return }
+        PathClipboard.copy(urls, style: style)
     }
 
     private func paste() {

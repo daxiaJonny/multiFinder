@@ -297,3 +297,57 @@ public final class GitPulseStore: ObservableObject {
         )
     }
 }
+
+enum GitChangeLookup {
+    static func changeType(for itemURL: URL, status: GitStatusInfo?) -> GitFileChange.ChangeType? {
+        guard let status else { return nil }
+        guard let relative = relativePath(of: itemURL, to: status.repoRootURL) else { return nil }
+        guard !relative.isEmpty else { return nil }
+
+        var matched: [GitFileChange.ChangeType] = []
+        for change in status.changedFiles {
+            let path = normalizedPath(change.path)
+            guard !path.isEmpty else { continue }
+            if path == relative
+                || path.hasPrefix(relative + "/")
+                || relative.hasPrefix(path + "/") {
+                matched.append(change.type)
+            }
+        }
+        return preferred(matched)
+    }
+
+    static func normalizedPath(_ raw: String) -> String {
+        var path = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let arrow = path.range(of: " -> ") {
+            path = String(path[arrow.upperBound...]).trimmingCharacters(in: .whitespaces)
+        }
+        if path.hasPrefix("\""), path.hasSuffix("\""), path.count >= 2 {
+            path = String(path.dropFirst().dropLast())
+            path = path
+                .replacingOccurrences(of: "\\\"", with: "\"")
+                .replacingOccurrences(of: "\\\\", with: "\\")
+        }
+        while path.hasSuffix("/") {
+            path.removeLast()
+        }
+        return path
+    }
+
+    static func relativePath(of url: URL, to repoRoot: URL) -> String? {
+        let root = repoRoot.standardizedFileURL
+        let item = url.standardizedFileURL
+        if item == root { return "" }
+        let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        guard item.path.hasPrefix(prefix) else { return nil }
+        return String(item.path.dropFirst(prefix.count))
+    }
+
+    private static func preferred(_ types: [GitFileChange.ChangeType]) -> GitFileChange.ChangeType? {
+        let rank: [GitFileChange.ChangeType] = [.modified, .added, .renamed, .deleted, .untracked, .other]
+        for type in rank where types.contains(type) {
+            return type
+        }
+        return nil
+    }
+}

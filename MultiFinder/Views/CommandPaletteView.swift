@@ -485,21 +485,96 @@ struct CommandPaletteView: View {
                 action: { pane.newFolder() }
             ))
 
+            items.append(CommandPaletteItem(
+                id: "file.newText",
+                title: "New Text File",
+                subtitle: "Create an empty .txt file",
+                category: .file,
+                iconName: "doc.badge.plus",
+                iconColor: .green,
+                shortcut: "⌥⌘N",
+                action: { pane.createFile(.text) }
+            ))
+
+            items.append(CommandPaletteItem(
+                id: "file.newMarkdown",
+                title: "New Markdown File",
+                subtitle: "Create an empty .md file",
+                category: .file,
+                iconName: "doc.richtext",
+                iconColor: .green,
+                shortcut: nil,
+                action: { pane.createFile(.markdown) }
+            ))
+
+            items.append(CommandPaletteItem(
+                id: "file.newJSON",
+                title: "New JSON File",
+                subtitle: "Create an empty .json file",
+                category: .file,
+                iconName: "curlybraces",
+                iconColor: .green,
+                shortcut: nil,
+                action: { pane.createFile(.json) }
+            ))
+
+            if pane.currentURL != nil {
+                items.append(CommandPaletteItem(
+                    id: "file.gitChanges",
+                    title: pane.showsOnlyGitChanges ? "Show All Files" : "Show Git Changes Only",
+                    subtitle: "Filter the current folder to uncommitted files",
+                    category: .file,
+                    iconName: "arrow.triangle.branch",
+                    iconColor: .orange,
+                    shortcut: "⌥⌘G",
+                    action: { pane.showsOnlyGitChanges.toggle() }
+                ))
+            }
+
             if !pane.selectedItems.isEmpty {
+                let selectedURLs = pane.selectedItemURLs
                 items.append(CommandPaletteItem(
                     id: "file.copyPath",
-                    title: "Copy Selected Path",
-                    subtitle: "Copy absolute path to clipboard",
+                    title: "Copy Absolute Path",
+                    subtitle: "Copy selected paths to the clipboard",
+                    category: .file,
+                    iconName: "link",
+                    iconColor: .cyan,
+                    shortcut: "⌥⌘C",
+                    action: { PathClipboard.copy(selectedURLs, style: .absolute) }
+                ))
+
+                items.append(CommandPaletteItem(
+                    id: "file.copyHomePath",
+                    title: "Copy Path from Home",
+                    subtitle: "Copy ~/ paths to the clipboard",
+                    category: .file,
+                    iconName: "house",
+                    iconColor: .cyan,
+                    shortcut: nil,
+                    action: { PathClipboard.copy(selectedURLs, style: .homeRelative) }
+                ))
+
+                items.append(CommandPaletteItem(
+                    id: "file.copyFileURL",
+                    title: "Copy File URL",
+                    subtitle: "Copy file:// URLs to the clipboard",
                     category: .file,
                     iconName: "link",
                     iconColor: .cyan,
                     shortcut: nil,
-                    action: {
-                        if let url = pane.selectedItem?.url {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(url.path, forType: .string)
-                        }
-                    }
+                    action: { PathClipboard.copy(selectedURLs, style: .fileURL) }
+                ))
+
+                items.append(CommandPaletteItem(
+                    id: "file.copyName",
+                    title: "Copy File Name",
+                    subtitle: "Copy selected names to the clipboard",
+                    category: .file,
+                    iconName: "textformat",
+                    iconColor: .cyan,
+                    shortcut: nil,
+                    action: { PathClipboard.copy(selectedURLs, style: .name) }
                 ))
 
                 items.append(CommandPaletteItem(

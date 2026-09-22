@@ -30,6 +30,35 @@ final class FileOperationServiceTests: XCTestCase {
         }
     }
 
+    func testCreateFileUsesUniqueNamesAndUndoRemovesTheLatestFile() async throws {
+        let first = await performDetailed { completion in
+            service.createFileDetailed(in: destinationDirectory, template: .text, completion: completion)
+        }
+        let firstURL = try XCTUnwrap(first.completedOutcomes.first?.destination)
+        XCTAssertEqual(first.status, .completed)
+        XCTAssertEqual(firstURL.pathExtension, "txt")
+        XCTAssertEqual(try String(contentsOf: firstURL), "")
+
+        let json = await performDetailed { completion in
+            service.createFileDetailed(in: destinationDirectory, template: .json, completion: completion)
+        }
+        let jsonURL = try XCTUnwrap(json.completedOutcomes.first?.destination)
+        XCTAssertEqual(jsonURL.pathExtension, "json")
+        XCTAssertEqual(try String(contentsOf: jsonURL), "{}\n")
+
+        let second = await performDetailed { completion in
+            service.createFileDetailed(in: destinationDirectory, template: .text, completion: completion)
+        }
+        let secondURL = try XCTUnwrap(second.completedOutcomes.first?.destination)
+        XCTAssertNotEqual(firstURL.lastPathComponent, secondURL.lastPathComponent)
+        XCTAssertTrue(secondURL.lastPathComponent.contains("2"))
+
+        service.undo()
+        try await waitUntil { self.service.canRedo && self.service.activeOperation == nil }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: secondURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: firstURL.path))
+    }
+
     func testKeepBothGeneratesCopyTwoAndCopyThree() async throws {
         let source = sourceDirectory.appendingPathComponent("report.txt")
         let firstCopyName = localizedCopyName(baseName: "report", fileExtension: "txt")

@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct FileListView: View {
     @ObservedObject var viewModel: FileBrowserViewModel
     @ObservedObject private var clipboard = FileClipboard.shared
+    @ObservedObject private var gitPulse = GitPulseStore.shared
     @State private var inlineRenameRequest: FileTableRenameRequest?
     @StateObject private var inlineRenameState = FileTableRenameState()
     let canTransferToAdjacentPane: ([URL], FileDropOperation) -> Bool
@@ -17,6 +18,10 @@ struct FileListView: View {
     let onCopyToAdjacentPane: ([URL]) -> Void
     let onMoveToAdjacentPane: ([URL]) -> Void
 
+    private var currentGitStatus: GitStatusInfo? {
+        gitPulse.status(for: viewModel.currentURL)
+    }
+
     var body: some View {
         Table(
             of: FileItem.self,
@@ -24,7 +29,11 @@ struct FileListView: View {
             sortOrder: focusedSortOrder
         ) {
             TableColumn("Name", sortUsing: FileItemComparator(field: .name)) { item in
-                FileTableNameCell(item: item, renameState: inlineRenameState)
+                FileTableNameCell(
+                    item: item,
+                    gitChange: GitChangeLookup.changeType(for: item.url, status: currentGitStatus),
+                    renameState: inlineRenameState
+                )
             }
             .width(min: 100, ideal: 180)
 
@@ -216,6 +225,8 @@ struct FileListView: View {
             clipboard.copy(urls: selectedItems.map(\.url))
         }
         .disabled(selectedItems.isEmpty)
+
+        CopyPathMenu(urls: selectedItems.map(\.url))
 
         Button("Cut") {
             onFocus()
@@ -523,6 +534,7 @@ private final class FileTableRenameState: ObservableObject {
 
 private struct FileTableNameCell: View {
     let item: FileItem
+    let gitChange: GitFileChange.ChangeType?
     // Table caches its cell content, so each cell must observe editing directly.
     @ObservedObject var renameState: FileTableRenameState
 
@@ -532,6 +544,9 @@ private struct FileTableNameCell: View {
                 .resizable()
                 .interpolation(.high)
                 .frame(width: 16, height: 16)
+            if let gitChange {
+                GitChangeBadge(change: gitChange)
+            }
             Text(item.name)
                 .lineLimit(1)
                 .truncationMode(.middle)
