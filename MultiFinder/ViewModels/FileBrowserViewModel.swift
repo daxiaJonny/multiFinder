@@ -278,23 +278,10 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         let worker = Task.detached(priority: .userInitiated) {
             let urls = try FileManager.default.contentsOfDirectory(
                 at: url,
-                includingPropertiesForKeys: [
-                    .isDirectoryKey, .fileSizeKey, .contentModificationDateKey,
-                    .isHiddenKey, .isSymbolicLinkKey, .isPackageKey
-                ],
+                includingPropertiesForKeys: Array(FileItem.resourceKeys),
                 options: []
             )
-            var items: [FileItem] = []
-            items.reserveCapacity(urls.count)
-            for (index, url) in urls.enumerated() {
-                if index.isMultiple(of: 32) { try Task.checkCancellation() }
-                let item = FileItem(url: url)
-                if includeHidden || !item.isHidden {
-                    items.append(item)
-                }
-            }
-            try Task.checkCancellation()
-            return items
+            return try Self.items(fromCachedResourceURLs: urls, includeHidden: includeHidden)
         }
         return try await withTaskCancellationHandler {
             try await worker.value
@@ -305,17 +292,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
 
     private nonisolated static func makeItems(from urls: [URL], includeHidden: Bool) async throws -> [FileItem] {
         let worker = Task.detached(priority: .userInitiated) {
-            var items: [FileItem] = []
-            items.reserveCapacity(urls.count)
-            for (index, url) in urls.enumerated() {
-                if index.isMultiple(of: 32) { try Task.checkCancellation() }
-                let item = FileItem(url: url)
-                if includeHidden || !item.isHidden {
-                    items.append(item)
-                }
-            }
-            try Task.checkCancellation()
-            return items
+            try Self.items(fromCachedResourceURLs: urls, includeHidden: includeHidden)
         }
         return try await withTaskCancellationHandler {
             try await worker.value
@@ -324,8 +301,26 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         }
     }
 
+    private nonisolated static func items(
+        fromCachedResourceURLs urls: [URL],
+        includeHidden: Bool
+    ) throws -> [FileItem] {
+        var items: [FileItem] = []
+        items.reserveCapacity(urls.count)
+        for (index, url) in urls.enumerated() {
+            if index.isMultiple(of: 32) { try Task.checkCancellation() }
+            let values = try? url.resourceValues(forKeys: FileItem.resourceKeys)
+            let item = FileItem(url: url, resourceValues: values)
+            if includeHidden || !item.isHidden {
+                items.append(item)
+            }
+        }
+        try Task.checkCancellation()
+        return items
+    }
+
     private func applyLoadedItems(_ loadedItems: [FileItem]) {
-        let itemsChanged = items != loadedItems
+        let rowIdentityChanged = !items.elementsEqual(loadedItems) { $0.id == $1.id }
         let visibleIDs = visibleItemIDs(in: loadedItems, filterText: filterText)
         let nextSelection: Set<FileItem.ID>
 
@@ -338,8 +333,9 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         }
 
         // Keep Table's selection valid at every publication boundary. A renamed URL is a new row ID.
+        // Metadata-only refreshes keep tableRevision so the SwiftUI table is not rebuilt.
         selectedItems.formIntersection(visibleIDs)
-        if itemsChanged {
+        if rowIdentityChanged {
             tableRevision &+= 1
         }
         items = loadedItems

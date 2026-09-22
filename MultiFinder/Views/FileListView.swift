@@ -1015,12 +1015,30 @@ enum FileDragProvider {
         let normalizedURLs = uniqueStandardizedURLs(urls)
         guard let firstURL = normalizedURLs.first else { return nil }
 
-        let provider = NSItemProvider(contentsOf: firstURL)
-            ?? NSItemProvider(object: firstURL as NSURL)
+        let provider = NSItemProvider()
         // Chromium-based apps (DingTalk mail) load the file UTI and name the
-        // temp file from suggestedName. NSItemProvider(contentsOf:) leaves it
-        // nil, so the receiver falls back to the UTI description.
+        // temp file from suggestedName. Without it, xlsx becomes
+        // "Office Open XML spreadsheet.xlsx".
         provider.suggestedName = firstURL.lastPathComponent
+        // Open in place so drag start does not copy the file. The handler
+        // returns the original URL, which keeps the real filename.
+        let fileURL = firstURL
+        provider.registerFileRepresentation(
+            forTypeIdentifier: contentType(for: fileURL).identifier,
+            fileOptions: .openInPlace,
+            visibility: .all
+        ) { completion in
+            completion(fileURL, false, nil)
+            return nil
+        }
+        provider.registerDataRepresentation(
+            forTypeIdentifier: UTType.fileURL.identifier,
+            visibility: .all
+        ) { completion in
+            completion(fileURL.dataRepresentation, nil)
+            return nil
+        }
+
         guard normalizedURLs.count > 1,
               let batchData = DroppedFileURL.batchData(for: normalizedURLs) else {
             return provider
@@ -1034,6 +1052,15 @@ enum FileDragProvider {
             return nil
         }
         return provider
+    }
+
+    private static func contentType(for url: URL) -> UTType {
+        if let type = UTType(filenameExtension: url.pathExtension) {
+            return type
+        }
+        let isDirectory = url.hasDirectoryPath
+            || ((try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false)
+        return isDirectory ? .folder : .data
     }
 
     private static func uniqueStandardizedURLs(_ urls: [URL]) -> [URL] {

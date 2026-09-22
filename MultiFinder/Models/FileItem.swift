@@ -14,17 +14,23 @@ struct FileItem: Identifiable, Hashable, Sendable {
     let isSymlink: Bool
     let isPackage: Bool
 
+    static let resourceKeys: Set<URLResourceKey> = [
+        .isDirectoryKey, .fileSizeKey, .contentModificationDateKey,
+        .isHiddenKey, .isSymbolicLinkKey, .isPackageKey
+    ]
+
     init(url: URL) {
+        let standardizedURL = url.standardizedFileURL
+        let values = try? standardizedURL.resourceValues(forKeys: Self.resourceKeys)
+        self.init(url: standardizedURL, resourceValues: values)
+    }
+
+    // `values` is the only metadata source. Callers that already prefetched `resourceKeys` use this to avoid a second stat.
+    init(url: URL, resourceValues values: URLResourceValues?) {
         let standardizedURL = url.standardizedFileURL
         self.id = standardizedURL
         self.url = standardizedURL
         self.name = standardizedURL.lastPathComponent
-
-        let keys: [URLResourceKey] = [
-            .isDirectoryKey, .fileSizeKey, .contentModificationDateKey,
-            .isHiddenKey, .isSymbolicLinkKey, .isPackageKey
-        ]
-        let values = try? standardizedURL.resourceValues(forKeys: Set(keys))
 
         self.isDirectory = values?.isDirectory ?? false
         self.size = Int64(values?.fileSize ?? 0)

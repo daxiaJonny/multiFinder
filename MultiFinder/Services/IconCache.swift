@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 @MainActor
 final class IconCache {
@@ -14,7 +15,7 @@ final class IconCache {
         if let cached = cache.object(forKey: key) {
             return cached
         }
-        let icon = NSWorkspace.shared.icon(forFile: path)
+        let icon = iconWithoutStat(for: path) ?? NSWorkspace.shared.icon(forFile: path)
         icon.size = NSSize(width: 16, height: 16)
         cache.setObject(icon, forKey: key)
         return icon
@@ -22,5 +23,18 @@ final class IconCache {
 
     func clear() {
         cache.removeAllObjects()
+    }
+
+    /// `icon(forFile:)` stats the path. Skip that for ordinary extensions.
+    /// No extension covers folders and extensionless files; `.app` icons differ per bundle.
+    private func iconWithoutStat(for path: String) -> NSImage? {
+        let ext = (path as NSString).pathExtension
+        guard !ext.isEmpty, ext.caseInsensitiveCompare("app") != .orderedSame else {
+            return nil
+        }
+        guard let type = UTType(filenameExtension: ext) else {
+            return nil
+        }
+        return NSWorkspace.shared.icon(for: type)
     }
 }

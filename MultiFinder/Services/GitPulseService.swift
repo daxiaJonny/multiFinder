@@ -62,9 +62,26 @@ public struct GitStatusInfo: Equatable, Sendable {
     }
 }
 
+private enum GitStatusScope: Sendable {
+    case repository
+    case directory(String)
+
+    var relativePath: String? {
+        switch self {
+        case .repository:
+            return nil
+        case .directory(let relativePath):
+            return relativePath
+        }
+    }
+}
+
 @MainActor
 public final class GitPulseStore: ObservableObject {
     public static let shared = GitPulseStore()
+
+    /// `status(for:)` only. Explicit `refresh(for:force:)` is not gated by this.
+    private static let automaticRefreshInterval: TimeInterval = 30
 
     @Published public private(set) var cache: [String: GitStatusInfo] = [:]
     private var inFlightPaths: Set<String> = []
@@ -75,23 +92,24 @@ public final class GitPulseStore: ObservableObject {
 
     public init() {}
 
-    /// Returns the cached GitStatusInfo for a given directory, or initiates a background fetch.
+    /// Returns cached status for the viewed directory, or starts a background fetch.
     public func status(for url: URL?) -> GitStatusInfo? {
-        guard let url = url?.standardizedFileURL else { return nil }
-        guard let repoRoot = findRepoRoot(for: url) else { return nil }
+        guard let directory = url?.standardizedFileURL else { return nil }
+        guard findRepoRoot(for: directory) != nil else { return nil }
 
-        let key = repoRoot.path
-        let isStale = lastCheckTime[key].map { Date().timeIntervalSince($0) > 5.0 } ?? true
+        let key = cacheKey(for: directory)
+        let isStale = lastCheckTime[key].map { Date().timeIntervalSince($0) > Self.automaticRefreshInterval } ?? true
         if cache[key] == nil || isStale {
-            refresh(for: repoRoot)
+            refresh(for: directory)
         }
         return cache[key]
     }
 
-    /// One index for the whole directory. Views must reuse it across rows.
+    /// One index for the viewed directory. Views must reuse it across rows.
     func changeIndex(for url: URL?) -> GitChangeIndex? {
-        guard let status = status(for: url) else { return nil }
-        let key = status.repoRootURL.path
+        guard let directory = url?.standardizedFileURL else { return nil }
+        guard let status = status(for: directory) else { return nil }
+        let key = cacheKey(for: directory)
         if let index = changeIndexes[key] {
             return index
         }
@@ -100,19 +118,46 @@ public final class GitPulseStore: ObservableObject {
         return index
     }
 
-    /// Explicitly refreshes the status for the given repository or child directory.
+    /// Explicitly refreshes status for a repository root or a directory inside it.
     public func refresh(for url: URL?, force: Bool = false) {
-        guard let url = url?.standardizedFileURL else { return }
-        guard let repoRoot = findRepoRoot(for: url) else { return }
+        guard let directory = url?.standardizedFileURL else { return }
+        guard let repoRoot = findRepoRoot(for: directory)?.standardizedFileURL else { return }
 
-        let key = repoRoot.path
+        for target in refreshTargets(startingAt: directory, repoRoot: repoRoot, force: force) {
+            startRefresh(of: target, repoRoot: repoRoot, force: force)
+        }
+    }
+
+    /// Force-refreshing the repo root re-queries cached child directories with their own pathspecs.
+    private func refreshTargets(startingAt directory: URL, repoRoot: URL, force: Bool) -> [URL] {
+        guard force, directory.path == repoRoot.path else { return [directory] }
+
+        let prefix = repoRoot.path.hasSuffix("/") ? repoRoot.path : repoRoot.path + "/"
+        var paths: Set<String> = [repoRoot.path]
+        for key in cache.keys where key == repoRoot.path || key.hasPrefix(prefix) {
+            paths.insert(key)
+        }
+        for key in changeIndexes.keys where key == repoRoot.path || key.hasPrefix(prefix) {
+            paths.insert(key)
+        }
+        for key in lastCheckTime.keys where key == repoRoot.path || key.hasPrefix(prefix) {
+            paths.insert(key)
+        }
+        return paths.sorted().map { URL(fileURLWithPath: $0).standardizedFileURL }
+    }
+
+    private func startRefresh(of directory: URL, repoRoot: URL, force: Bool) {
+        let directory = directory.standardizedFileURL
+        let key = cacheKey(for: directory)
         guard !inFlightPaths.contains(key) || force else { return }
+        guard let scope = statusScope(for: directory, repoRoot: repoRoot) else { return }
 
         inFlightPaths.insert(key)
         lastCheckTime[key] = Date()
+        let relativePath = scope.relativePath
 
-        Task.detached(priority: .userInitiated) { [weak self, repoRoot, key] in
-            let status = await Self.queryGitStatus(at: repoRoot)
+        Task.detached(priority: .userInitiated) { [weak self, repoRoot, key, relativePath] in
+            let status = await Self.queryGitStatus(at: repoRoot, relativePath: relativePath)
             await MainActor.run {
                 guard let self = self else { return }
                 self.inFlightPaths.remove(key)
@@ -122,6 +167,25 @@ public final class GitPulseStore: ObservableObject {
                 self.changeIndexes[key] = GitChangeIndex(status: status)
             }
         }
+    }
+
+    /// Viewed-directory path. The repo root is not reused as the key for a subdirectory.
+    private func cacheKey(for directory: URL) -> String {
+        directory.standardizedFileURL.path
+    }
+
+    /// Full status at the repo root; path-scoped status for a directory inside it.
+    private func statusScope(for directory: URL, repoRoot: URL) -> GitStatusScope? {
+        let rootPath = repoRoot.standardizedFileURL.path
+        let directoryPath = directory.standardizedFileURL.path
+        if directoryPath == rootPath {
+            return .repository
+        }
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        guard directoryPath.hasPrefix(prefix) else { return nil }
+        let relativePath = String(directoryPath.dropFirst(prefix.count))
+        guard !relativePath.isEmpty else { return .repository }
+        return .directory(relativePath)
     }
 
     /// Fetches the last N commits for the repository.
@@ -209,10 +273,16 @@ public final class GitPulseStore: ObservableObject {
 
     // MARK: - Background Worker
 
-    private static func queryGitStatus(at repoRoot: URL) async -> GitStatusInfo? {
+    private static func queryGitStatus(at repoRoot: URL, relativePath: String?) async -> GitStatusInfo? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = ["status", "--porcelain=v1", "-b"]
+        // Porcelain paths stay relative to the repo root; the pathspec only limits the report.
+        var arguments = ["status", "--porcelain=v1", "-b"]
+        if let relativePath {
+            arguments.append("--")
+            arguments.append(relativePath)
+        }
+        process.arguments = arguments
         process.currentDirectoryURL = repoRoot
         process.standardInput = FileHandle.nullDevice
 

@@ -570,7 +570,7 @@ final class FileBrowserViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testMetadataChangeRebuildsVisibleRows() async throws {
+    func testMetadataChangeKeepsTableRevision() async throws {
         let file = temporaryDirectory.appendingPathComponent("changing.txt")
         try Data("a".utf8).write(to: file)
         let viewModel = FileBrowserViewModel(location: .directory(temporaryDirectory))
@@ -583,7 +583,7 @@ final class FileBrowserViewModelTests: XCTestCase {
         try await waitUntil {
             !viewModel.isLoading && viewModel.items.first?.size == 16
         }
-        XCTAssertGreaterThan(viewModel.tableRevision, initialRevision)
+        XCTAssertEqual(viewModel.tableRevision, initialRevision)
     }
 
     @MainActor

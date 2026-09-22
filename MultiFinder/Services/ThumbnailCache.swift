@@ -75,6 +75,7 @@ final class ThumbnailCache {
     private let generator: QLThumbnailGenerator
     private let workspace: NSWorkspace
     private let cache = NSCache<NSString, NSImage>()
+    private let generationGate = ThumbnailGenerationGate()
 
     init(
         generator: QLThumbnailGenerator = .shared,
@@ -132,6 +133,15 @@ final class ThumbnailCache {
             return fallback
         }
 
+        let permit: ThumbnailGenerationGate.Permit
+        do {
+            permit = try await generationGate.acquire()
+        } catch {
+            return fallback
+        }
+        defer { generationGate.release(permit) }
+        guard !Task.isCancelled else { return fallback }
+
         let request = QLThumbnailGenerator.Request(
             fileAt: key.url,
             size: CGSize(
@@ -144,7 +154,10 @@ final class ThumbnailCache {
         request.iconMode = false
         let cancellation = RequestCancellation(generator: generator, request: request)
         let generatedThumbnail = await withTaskCancellationHandler(operation: {
-            await cancellation.generate()
+            guard !Task.isCancelled else {
+                return GeneratedThumbnail(image: nil)
+            }
+            return await cancellation.generate()
         }, onCancel: {
             cancellation.cancel()
         })
@@ -191,5 +204,120 @@ final class ThumbnailCache {
     private func store(_ image: NSImage, forKey key: NSString, size: CGSize) {
         let pixelArea = max(Int((size.width * size.height).rounded()), 1)
         cache.setObject(image, forKey: key, cost: pixelArea * 4)
+    }
+}
+
+/// Async cap on in-flight Quick Look generations. Waiting suspends and is cancellable;
+/// this must not block the main actor the way a `DispatchSemaphore` would.
+private final class ThumbnailGenerationGate: @unchecked Sendable {
+    static let limit = 4
+
+    struct Permit: Sendable {
+        fileprivate let id: UUID
+    }
+
+    private final class Waiter: @unchecked Sendable {
+        var continuation: CheckedContinuation<Permit, any Error>?
+        var state: State = .pending
+
+        enum State {
+            case pending
+            case waiting
+            case finished
+        }
+    }
+
+    private let lock = NSLock()
+    private var held: Set<UUID> = []
+    private var order: [Waiter] = []
+
+    func acquire() async throws -> Permit {
+        try Task.checkCancellation()
+        if let permit = tryTakePermit() {
+            return permit
+        }
+
+        let waiter = Waiter()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Permit, any Error>) in
+                let decision = self.lock.withLock { () -> Decision in
+                    if waiter.state == .finished {
+                        return .cancel
+                    }
+                    if self.held.count < Self.limit {
+                        return .permit(self.insertPermit())
+                    }
+                    waiter.continuation = continuation
+                    waiter.state = .waiting
+                    self.order.append(waiter)
+                    return .queued
+                }
+                switch decision {
+                case .cancel:
+                    continuation.resume(throwing: CancellationError())
+                case .permit(let permit):
+                    continuation.resume(returning: permit)
+                case .queued:
+                    break
+                }
+            }
+        } onCancel: {
+            self.cancel(waiter)
+        }
+    }
+
+    func release(_ permit: Permit) {
+        let resumeNext: (() -> Void)? = lock.withLock {
+            guard held.remove(permit.id) != nil else { return nil }
+            while !order.isEmpty {
+                let waiter = order.removeFirst()
+                guard waiter.state == .waiting, let continuation = waiter.continuation else { continue }
+                waiter.state = .finished
+                waiter.continuation = nil
+                let next = insertPermit()
+                return { continuation.resume(returning: next) }
+            }
+            return nil
+        }
+        resumeNext?()
+    }
+
+    private enum Decision {
+        case cancel
+        case permit(Permit)
+        case queued
+    }
+
+    private func tryTakePermit() -> Permit? {
+        lock.withLock {
+            guard held.count < Self.limit else { return nil }
+            return insertPermit()
+        }
+    }
+
+    /// Caller holds `lock`.
+    private func insertPermit() -> Permit {
+        let permit = Permit(id: UUID())
+        held.insert(permit.id)
+        return permit
+    }
+
+    private func cancel(_ waiter: Waiter) {
+        let continuation: CheckedContinuation<Permit, any Error>? = lock.withLock {
+            switch waiter.state {
+            case .waiting:
+                waiter.state = .finished
+                let continuation = waiter.continuation
+                waiter.continuation = nil
+                order.removeAll { $0 === waiter }
+                return continuation
+            case .pending:
+                waiter.state = .finished
+                return nil
+            case .finished:
+                return nil
+            }
+        }
+        continuation?.resume(throwing: CancellationError())
     }
 }
