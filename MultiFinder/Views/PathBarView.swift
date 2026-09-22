@@ -116,7 +116,7 @@ struct PathBarView: View {
             .onTapGesture(count: 2, perform: startEditing)
 
             if let currentURL = viewModel.currentURL,
-               let gitStatus = gitPulseStore.status(for: currentURL) {
+               let gitStatus = gitPulseStore.cachedStatus(for: currentURL) {
                 GitPulseBadgeView(status: gitStatus, isCompact: headerWidth < 340, onFocus: onFocus)
                     .fixedSize()
 

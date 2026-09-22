@@ -40,14 +40,34 @@ struct FileItem: Identifiable, Hashable, Sendable {
         self.isPackage = values?.isPackage ?? false
 
         if self.isDirectory {
-            self.kind = self.isPackage ? L10n.string("Package") : L10n.string("Folder")
+            self.kind = self.isPackage ? Self.packageKind : Self.folderKind
         } else {
             self.kind = Self.fileKind(for: standardizedURL.pathExtension)
         }
     }
 
+    private static let folderKind = L10n.string("Folder")
+    private static let packageKind = L10n.string("Package")
+    private static var kindCache: [String: String] = [:]
+    private static let kindCacheLock = NSLock()
+
     static func fileKind(for ext: String) -> String {
-        switch ext.lowercased() {
+        let key = ext.lowercased()
+        kindCacheLock.lock()
+        if let cached = kindCache[key] {
+            kindCacheLock.unlock()
+            return cached
+        }
+        kindCacheLock.unlock()
+        let kind = kindName(for: key)
+        kindCacheLock.lock()
+        kindCache[key] = kind
+        kindCacheLock.unlock()
+        return kind
+    }
+
+    private static func kindName(for ext: String) -> String {
+        switch ext {
         case "swift": return L10n.string("Swift File")
         case "js": return L10n.string("JavaScript File")
         case "ts": return L10n.string("TypeScript File")

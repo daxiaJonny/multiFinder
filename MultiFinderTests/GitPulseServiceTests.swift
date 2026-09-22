@@ -157,9 +157,15 @@ final class GitPulseServiceTests: XCTestCase {
         gitStore.refresh(for: nested, force: true)
         gitStore.refresh(for: spaced, force: true)
 
-        let rootStatus = try await waitForCachedStatus(at: root)
+        let rootStatus = try await waitForCachedStatus(at: root) {
+            let paths = self.normalizedChangePaths($0)
+            return paths.contains("my notes") || paths.contains("my notes/todo.md")
+        }
         let nestedStatus = try await waitForCachedStatus(at: nested)
-        let spacedStatus = try await waitForCachedStatus(at: spaced)
+        let spacedStatus = try await waitForCachedStatus(at: spaced) {
+            let paths = self.normalizedChangePaths($0)
+            return paths.contains("my notes") || paths.contains("my notes/todo.md")
+        }
 
         XCTAssertEqual(rootStatus.repoRootURL.standardizedFileURL.path, root.path)
         XCTAssertEqual(nestedStatus.repoRootURL.standardizedFileURL.path, root.path)
@@ -201,11 +207,14 @@ final class GitPulseServiceTests: XCTestCase {
         XCTAssertTrue(normalizedChangePaths(rootAfterRefresh).contains("nested/note.txt"))
     }
 
-    private func waitForCachedStatus(at url: URL) async throws -> GitStatusInfo {
+    private func waitForCachedStatus(
+        at url: URL,
+        matching predicate: (GitStatusInfo) -> Bool = { _ in true }
+    ) async throws -> GitStatusInfo {
         let key = url.standardizedFileURL.path
         let deadline = Date().addingTimeInterval(8)
         while Date() < deadline {
-            if let status = gitStore.cache[key] {
+            if let status = gitStore.cache[key], predicate(status) {
                 return status
             }
             try await Task.sleep(nanoseconds: 40_000_000)

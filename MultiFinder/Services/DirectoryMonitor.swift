@@ -1,42 +1,72 @@
+import CoreServices
 import Foundation
-import Darwin
 
+/// File-level FSEvents, so a saved file updates that file instead of the whole folder.
 @MainActor
 final class DirectoryMonitor {
-    private var source: DispatchSourceFileSystemObject?
-    private var fileDescriptor: Int32 = -1
+    private final class EventBox {
+        var onChange: ([URL]) -> Void = { _ in }
+    }
 
-    func watch(_ url: URL, onChange: @escaping @MainActor () -> Void) {
+    private var stream: FSEventStreamRef?
+    private let eventBox = EventBox()
+
+    func watch(_ url: URL, onChange: @escaping @MainActor ([URL]) -> Void) {
         cancel()
-
-        let descriptor = open(url.path, O_EVTONLY)
-        guard descriptor >= 0 else { return }
-
-        fileDescriptor = descriptor
-        let source = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: descriptor,
-            eventMask: [.write, .delete, .rename, .attrib, .extend, .link, .revoke],
-            queue: .main
-        )
-        source.setEventHandler {
+        eventBox.onChange = { urls in
             Task { @MainActor in
-                onChange()
+                onChange(urls)
             }
         }
-        source.setCancelHandler {
-            close(descriptor)
-        }
-        self.source = source
-        source.resume()
+
+        var context = FSEventStreamContext(
+            version: 0,
+            info: Unmanaged.passUnretained(eventBox).toOpaque(),
+            retain: nil,
+            release: nil,
+            copyDescription: nil
+        )
+        let flags = FSEventStreamCreateFlags(
+            kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes
+        )
+        guard let stream = FSEventStreamCreate(
+            nil,
+            { _, info, _, eventPaths, _, _ in
+                guard let info else { return }
+                let box = Unmanaged<DirectoryMonitor.EventBox>.fromOpaque(info).takeUnretainedValue()
+                let paths = unsafeBitCast(eventPaths, to: NSArray.self)
+                let urls = paths.compactMap { value -> URL? in
+                    guard let path = value as? String else { return nil }
+                    return URL(fileURLWithPath: path)
+                }
+                box.onChange(urls)
+            },
+            &context,
+            [url.path] as CFArray,
+            FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
+            0.3,
+            flags
+        ) else { return }
+
+        self.stream = stream
+        FSEventStreamSetDispatchQueue(stream, .main)
+        FSEventStreamStart(stream)
     }
 
     func cancel() {
-        source?.cancel()
-        source = nil
-        fileDescriptor = -1
+        if let stream {
+            FSEventStreamStop(stream)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+        }
+        stream = nil
     }
 
     deinit {
-        source?.cancel()
+        if let stream {
+            FSEventStreamStop(stream)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+        }
     }
 }

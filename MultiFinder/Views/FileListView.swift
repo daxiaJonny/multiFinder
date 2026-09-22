@@ -19,75 +19,61 @@ struct FileListView: View {
     let onMoveToAdjacentPane: ([URL]) -> Void
 
     var body: some View {
-        let gitIndex = gitPulse.changeIndex(for: viewModel.currentURL)
-        return Table(
-            of: FileItem.self,
-            selection: focusedSelection,
-            sortOrder: focusedSortOrder
-        ) {
-            TableColumn("Name", sortUsing: FileItemComparator(field: .name)) { item in
-                FileTableNameCell(
-                    item: item,
-                    gitChange: gitIndex?.changeType(for: item.url),
-                    renameState: inlineRenameState
+        let gitIndex = gitPulse.cachedChangeIndex(for: viewModel.currentURL)
+        return VirtualFileTable(
+            items: viewModel.visibleItems,
+            itemsRevision: viewModel.itemsRevision,
+            selection: viewModel.selectedItems,
+            sortOrder: viewModel.sortOrder,
+            gitIndex: gitIndex,
+            gitGeneration: gitPulse.generation,
+            onSelection: { selection in
+                onFocus()
+                viewModel.selectedItems = selection
+            },
+            onSort: { sortOrder in
+                onFocus()
+                viewModel.sortOrder = sortOrder
+            },
+            onOpen: { item in
+                onFocus()
+                viewModel.openItem(item)
+            },
+            onBeginRename: {
+                guard let item = viewModel.selectedItem else { return }
+                onFocus()
+                inlineRenameRequest = FileTableRenameRequest(itemID: item.id)
+            },
+            onFocus: onFocus,
+            onQuickLook: {
+                onFocus()
+                onQuickLook()
+            },
+            onBeginFiltering: onBeginFiltering,
+            onDelete: {
+                onFocus()
+                viewModel.deleteSelected()
+            },
+            onDrop: { urls, destination in
+                onFocus()
+                viewModel.transferDroppedItems(
+                    urls,
+                    into: destination,
+                    operation: FileDropModifierKeys.operation(for: urls, into: destination)
                 )
             }
-            .width(min: 100, ideal: 180)
-
-            TableColumn("Date Modified", sortUsing: FileItemComparator(field: .date)) { item in
-                Text(item.modificationDate, format: .dateTime.year().month(.twoDigits).day().hour().minute())
-                    .foregroundStyle(.secondary)
-            }
-            .width(min: 110, ideal: 130, max: 200)
-
-            TableColumn("Size", sortUsing: FileItemComparator(field: .size)) { item in
-                Text(item.isDirectory ? "--" : ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file))
-                    .foregroundStyle(.secondary)
-            }
-            .width(min: 55, ideal: 70, max: 110)
-
-            TableColumn("Kind", sortUsing: FileItemComparator(field: .kind)) { item in
-                Text(item.kind)
-                    .foregroundStyle(.secondary)
-            }
-            .width(min: 65, ideal: 85, max: 150)
-        } rows: {
-            ForEach(viewModel.visibleItems) { item in
-                // Table drop targets must be attached to TableRowContent, not hosted cell views.
-                if item.isDirectory && !item.isPackage {
-                    if FileDropSafety.canStartDragging(item) {
-                        TableRow(item)
-                            .itemProvider {
-                                dragProvider(for: item)
-                            }
-                            .dropDestination(for: DroppedFileURL.self) { items in
-                                transferDroppedItems(items, into: item.url)
-                            }
-                    } else {
-                        TableRow(item)
-                            .dropDestination(for: DroppedFileURL.self) { items in
-                                transferDroppedItems(items, into: item.url)
-                            }
-                    }
-                } else {
-                    TableRow(item)
-                        .itemProvider {
-                            dragProvider(for: item)
-                        }
-                }
-            }
-        }
-        .id(viewModel.tableRevision)
-        .overlay {
-            FileTableRangeSelectionMonitor(
-                itemIDs: viewModel.visibleItems.map(\.id),
-                selection: focusedSelection
-            )
-            .allowsHitTesting(false)
+        )
+        .contextMenu {
+            fileContextMenu(selection: viewModel.selectedItems)
         }
         .overlay(alignment: .topLeading) {
             FileTableClickMonitor(
                 items: viewModel.visibleItems,
+                selection: viewModel.selectedItems,
+                onSelection: { selection in
+                    onFocus()
+                    viewModel.selectedItems = selection
+                },
                 renameRequest: inlineRenameRequest,
                 onEditingItemChange: { itemID in
                     // Editing can also end during an NSViewRepresentable update.
@@ -111,11 +97,6 @@ struct FileListView: View {
             )
             .frame(width: 1, height: 1)
             .allowsHitTesting(false)
-        }
-        .contextMenu(forSelectionType: FileItem.ID.self) { selection in
-            fileContextMenu(selection: selection)
-        } primaryAction: { selection in
-            open(selection: selection)
         }
         .onKeyPress(KeyEquivalent("/")) {
             onBeginFiltering()
@@ -385,11 +366,10 @@ struct FileListView: View {
         let dragItems = viewModel.selectedItems.contains(item.id)
             ? viewModel.selectedFileItems
             : [item]
-        guard dragItems.allSatisfy({ FileDropSafety.canStartDragging($0) }) else {
-            return NSItemProvider()
-        }
-        return FileDragProvider.provider(for: dragItems.map(\.url))
-            ?? NSItemProvider(object: item.url as NSURL)
+        return FileDragProvider.provider(
+            for: dragItems.map(\.url),
+            primaryIsDirectory: dragItems.first?.isDirectory == true && dragItems.first?.isPackage != true
+        ) ?? NSItemProvider(object: item.url as NSURL)
     }
 
     private func pasteFromClipboard(into destination: URL?) {
@@ -537,7 +517,7 @@ private struct FileTableNameCell: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(nsImage: IconCache.shared.icon(for: item.url.path))
+            Image(nsImage: IconCache.shared.icon(for: item))
                 .resizable()
                 .interpolation(.high)
                 .frame(width: 16, height: 16)
@@ -565,6 +545,8 @@ private struct FileTableRenameRequest: Equatable {
 
 private struct FileTableClickMonitor: NSViewRepresentable {
     let items: [FileItem]
+    let selection: Set<FileItem.ID>
+    let onSelection: (Set<FileItem.ID>) -> Void
     let renameRequest: FileTableRenameRequest?
     let onEditingItemChange: (FileItem.ID?) -> Void
     let onRename: (FileItem, String) -> Void
@@ -574,6 +556,8 @@ private struct FileTableClickMonitor: NSViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             items: items,
+            selection: selection,
+            onSelection: onSelection,
             onEditingItemChange: onEditingItemChange,
             onRename: onRename,
             onContextMenuItem: onContextMenuItem,
@@ -591,6 +575,13 @@ private struct FileTableClickMonitor: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.anchorView = nsView
         context.coordinator.items = items
+        context.coordinator.selection = selection
+        context.coordinator.onSelection = onSelection
+        if selection.isEmpty {
+            context.coordinator.anchorID = nil
+        } else if let anchor = context.coordinator.anchorID, !items.contains(where: { $0.id == anchor }) {
+            context.coordinator.anchorID = nil
+        }
         context.coordinator.onEditingItemChange = onEditingItemChange
         context.coordinator.onRename = onRename
         context.coordinator.onContextMenuItem = onContextMenuItem
@@ -608,6 +599,10 @@ private struct FileTableClickMonitor: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextFieldDelegate {
         weak var anchorView: NSView?
         var items: [FileItem]
+        var selection: Set<FileItem.ID>
+        var onSelection: (Set<FileItem.ID>) -> Void
+        var anchorID: FileItem.ID?
+        private var consumesMouseUp = false
         var onEditingItemChange: (FileItem.ID?) -> Void
         var onRename: (FileItem, String) -> Void
         var onContextMenuItem: (FileItem) -> Void
@@ -626,12 +621,16 @@ private struct FileTableClickMonitor: NSViewRepresentable {
 
         init(
             items: [FileItem],
+            selection: Set<FileItem.ID>,
+            onSelection: @escaping (Set<FileItem.ID>) -> Void,
             onEditingItemChange: @escaping (FileItem.ID?) -> Void,
             onRename: @escaping (FileItem, String) -> Void,
             onContextMenuItem: @escaping (FileItem) -> Void,
             onBlankContextMenu: @escaping () -> Void
         ) {
             self.items = items
+            self.selection = selection
+            self.onSelection = onSelection
             self.onEditingItemChange = onEditingItemChange
             self.onRename = onRename
             self.onContextMenuItem = onContextMenuItem
@@ -641,10 +640,9 @@ private struct FileTableClickMonitor: NSViewRepresentable {
         func startMonitoring() {
             guard eventMonitor == nil else { return }
             eventMonitor = NSEvent.addLocalMonitorForEvents(
-                matching: [.leftMouseDown, .leftMouseDragged, .rightMouseDown]
+                matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .rightMouseDown]
             ) { [weak self] event in
-                self?.handle(event)
-                return event
+                self?.handle(event) ?? event
             }
         }
 
@@ -666,7 +664,11 @@ private struct FileTableClickMonitor: NSViewRepresentable {
             }
         }
 
-        private func handle(_ event: NSEvent) {
+        private func handle(_ event: NSEvent) -> NSEvent? {
+            if event.type == .leftMouseUp, consumesMouseUp {
+                consumesMouseUp = false
+                return nil
+            }
             guard let anchorView,
                   let window = anchorView.window,
                   event.window === window else {
@@ -675,7 +677,7 @@ private struct FileTableClickMonitor: NSViewRepresentable {
                 if inlineEditor != nil {
                     finishEditing(commit: true)
                 }
-                return
+                return event
             }
 
             let windowPoint = event.locationInWindow
@@ -686,10 +688,18 @@ private struct FileTableClickMonitor: NSViewRepresentable {
                 if inlineEditor != nil {
                     finishEditing(commit: true)
                 }
-                return
+                return event
             }
 
             let tablePoint = tableView.convert(windowPoint, from: nil)
+            if event.type == .leftMouseDown,
+               event.modifierFlags.contains(.shift),
+               !event.modifierFlags.contains(.control),
+               !(tableView is VirtualFileTableView),
+               selectShiftRange(at: tablePoint, in: tableView, command: event.modifierFlags.contains(.command)) {
+                consumesMouseUp = true
+                return nil
+            }
             if event.type == .rightMouseDown {
                 let row = tableView.row(at: tablePoint)
                 if items.indices.contains(row) {
@@ -697,18 +707,23 @@ private struct FileTableClickMonitor: NSViewRepresentable {
                 } else {
                     onBlankContextMenu()
                 }
-                return
+                return event
             }
 
             guard event.type == .leftMouseDown else {
                 pendingEditTask?.cancel()
                 resetNameClickSequence()
-                return
+                return event
+            }
+
+            let row = tableView.row(at: tablePoint)
+            if items.indices.contains(row) {
+                anchorID = items[row].id
             }
 
             if let inlineEditor,
                inlineEditor.convert(inlineEditor.bounds, to: tableView).contains(tablePoint) {
-                return
+                return event
             }
             if inlineEditor != nil {
                 finishEditing(commit: true)
@@ -717,17 +732,17 @@ private struct FileTableClickMonitor: NSViewRepresentable {
             guard let hit = nameHit(in: tableView, at: tablePoint) else {
                 pendingEditTask?.cancel()
                 resetNameClickSequence()
-                return
+                return event
             }
 
             pendingEditTask?.cancel()
             guard event.modifierFlags.intersection([.shift, .command, .control]).isEmpty else {
                 resetNameClickSequence()
-                return
+                return event
             }
             if event.clickCount > 1 {
                 resetNameClickSequence()
-                return
+                return event
             }
 
             let clickTime = ProcessInfo.processInfo.systemUptime
@@ -736,7 +751,7 @@ private struct FileTableClickMonitor: NSViewRepresentable {
                 && clickTime - lastNameClickTime >= max(NSEvent.doubleClickInterval, 0.2)
             lastNameClickItemID = hit.item.id
             lastNameClickTime = clickTime
-            guard shouldEdit else { return }
+            guard shouldEdit else { return event }
 
             resetNameClickSequence()
             pendingEditTask = Task { @MainActor [weak self, weak tableView] in
@@ -749,6 +764,27 @@ private struct FileTableClickMonitor: NSViewRepresentable {
                 self.pendingEditTask = nil
                 self.startEditing(hit.item, row: hit.row, column: hit.column, in: tableView)
             }
+            return event
+        }
+
+        private func selectShiftRange(at point: NSPoint, in tableView: NSTableView, command: Bool) -> Bool {
+            let row = tableView.row(at: point)
+            guard items.indices.contains(row) else { return false }
+            let ids = items.map(\.id)
+            let anchor = anchorID.flatMap { id in ids.firstIndex(of: id) }
+                ?? ids.firstIndex(where: selection.contains)
+                ?? row
+            anchorID = ids[anchor]
+            let range = min(anchor, row)...max(anchor, row)
+            let rangeSelection = Set(ids[range])
+            let nextSelection = command ? selection.union(rangeSelection) : rangeSelection
+            let indexes = IndexSet(ids.indices.filter { nextSelection.contains(ids[$0]) })
+            tableView.selectRowIndexes(indexes, byExtendingSelection: false)
+            selection = nextSelection
+            onSelection(nextSelection)
+            resetNameClickSequence()
+            pendingEditTask?.cancel()
+            return true
         }
 
         private func nameHit(in tableView: NSTableView, at point: NSPoint) -> (item: FileItem, row: Int, column: Int)? {
@@ -1011,7 +1047,7 @@ enum FileDropModifierKeys {
 }
 
 enum FileDragProvider {
-    static func provider(for urls: [URL]) -> NSItemProvider? {
+    static func provider(for urls: [URL], primaryIsDirectory: Bool = false) -> NSItemProvider? {
         let normalizedURLs = uniqueStandardizedURLs(urls)
         guard let firstURL = normalizedURLs.first else { return nil }
 
@@ -1020,23 +1056,26 @@ enum FileDragProvider {
         // temp file from suggestedName. Without it, xlsx becomes
         // "Office Open XML spreadsheet.xlsx".
         provider.suggestedName = firstURL.lastPathComponent
-        // Open in place so drag start does not copy the file. The handler
-        // returns the original URL, which keeps the real filename.
         let fileURL = firstURL
-        provider.registerFileRepresentation(
-            forTypeIdentifier: contentType(for: fileURL).identifier,
-            fileOptions: .openInPlace,
-            visibility: .all
-        ) { completion in
-            completion(fileURL, false, nil)
-            return nil
-        }
         provider.registerDataRepresentation(
             forTypeIdentifier: UTType.fileURL.identifier,
             visibility: .all
         ) { completion in
             completion(fileURL.dataRepresentation, nil)
             return nil
+        }
+        // A public.folder file representation makes AppKit copy the directory
+        // when the drag starts, which freezes the click. Folders travel as URLs.
+        if !primaryIsDirectory {
+            let type = UTType(filenameExtension: fileURL.pathExtension) ?? .data
+            provider.registerFileRepresentation(
+                forTypeIdentifier: type.identifier,
+                fileOptions: .openInPlace,
+                visibility: .all
+            ) { completion in
+                completion(fileURL, true, nil)
+                return nil
+            }
         }
 
         guard normalizedURLs.count > 1,
@@ -1052,15 +1091,6 @@ enum FileDragProvider {
             return nil
         }
         return provider
-    }
-
-    private static func contentType(for url: URL) -> UTType {
-        if let type = UTType(filenameExtension: url.pathExtension) {
-            return type
-        }
-        let isDirectory = url.hasDirectoryPath
-            || ((try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false)
-        return isDirectory ? .folder : .data
     }
 
     private static func uniqueStandardizedURLs(_ urls: [URL]) -> [URL] {

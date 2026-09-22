@@ -669,7 +669,7 @@ struct CommandPaletteView: View {
         // MARK: Git Pulse
         if let pane = layoutManager.focusedPane,
            let currentURL = pane.currentURL,
-           let gitStatus = GitPulseStore.shared.status(for: currentURL) {
+           let gitStatus = GitPulseStore.shared.cachedStatus(for: currentURL) {
             items.append(CommandPaletteItem(
                 id: "git.copyBranch",
                 title: "Git: Copy Branch Name (\(gitStatus.branch))",

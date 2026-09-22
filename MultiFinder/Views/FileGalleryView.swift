@@ -71,7 +71,7 @@ struct FileGalleryView: View {
         ScrollViewReader { scrollProxy in
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 8) {
-                    let gitIndex = gitPulse.changeIndex(for: viewModel.currentURL)
+                    let gitIndex = gitPulse.cachedChangeIndex(for: viewModel.currentURL)
                     ForEach(viewModel.visibleItems) { item in
                         galleryCell(for: item, gitIndex: gitIndex)
                             .id(item.id)
@@ -145,20 +145,9 @@ struct FileGalleryView: View {
     @ViewBuilder
     private func galleryCell(for item: FileItem, gitIndex: GitChangeIndex?) -> some View {
         if item.isDirectory && !item.isPackage {
-            if FileDropSafety.canStartDragging(item) {
-                baseCell(for: item, gitIndex: gitIndex)
-                    .onDrag { dragProvider(for: item) }
-                    .dropDestination(
-                        for: DroppedFileURL.self,
-                        action: { droppedItems, _ in
-                            transferDroppedItems(droppedItems, into: item.url)
-                        },
-                        isTargeted: { targeted in
-                            dropTargetID = targeted ? item.id : nil
-                        }
-                    )
-            } else {
-                baseCell(for: item, gitIndex: gitIndex).dropDestination(
+            baseCell(for: item, gitIndex: gitIndex)
+                .onDrag { dragProvider(for: item) }
+                .dropDestination(
                     for: DroppedFileURL.self,
                     action: { droppedItems, _ in
                         transferDroppedItems(droppedItems, into: item.url)
@@ -167,7 +156,6 @@ struct FileGalleryView: View {
                         dropTargetID = targeted ? item.id : nil
                     }
                 )
-            }
         } else if FileDropSafety.canStartDragging(item) {
             baseCell(for: item, gitIndex: gitIndex).onDrag { dragProvider(for: item) }
         } else {
@@ -308,11 +296,10 @@ struct FileGalleryView: View {
         let draggedItems = viewModel.selectedItems.contains(item.id)
             ? viewModel.selectedFileItems
             : [item]
-        guard draggedItems.allSatisfy({ FileDropSafety.canStartDragging($0) }) else {
-            return NSItemProvider()
-        }
-        return FileDragProvider.provider(for: draggedItems.map(\.url))
-            ?? NSItemProvider(object: item.url as NSURL)
+        return FileDragProvider.provider(
+            for: draggedItems.map(\.url),
+            primaryIsDirectory: draggedItems.first?.isDirectory == true && draggedItems.first?.isPackage != true
+        ) ?? NSItemProvider(object: item.url as NSURL)
     }
 
     private func transferDroppedItems(_ items: [DroppedFileURL], into destination: URL) -> Bool {

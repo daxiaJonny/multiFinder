@@ -56,26 +56,57 @@ struct FileColumnView: View {
     }
 
     private var itemColumn: some View {
-        let gitIndex = gitPulse.changeIndex(for: viewModel.currentURL)
-        return List(selection: focusedSelection) {
-            ForEach(viewModel.visibleItems) { item in
-                row(for: item, gitIndex: gitIndex)
-                    .tag(item.id)
+        let gitIndex = gitPulse.cachedChangeIndex(for: viewModel.currentURL)
+        return VirtualFileTable(
+            items: viewModel.visibleItems,
+            itemsRevision: viewModel.itemsRevision,
+            selection: viewModel.selectedItems,
+            sortOrder: viewModel.sortOrder,
+            gitIndex: gitIndex,
+            gitGeneration: gitPulse.generation,
+            showsMetadataColumns: false,
+            onGoUp: { viewModel.goUp() },
+            onSelection: { selection in
+                focusColumn()
+                viewModel.selectedItems = selection
+                selectionAnchor = selection.first
+            },
+            onSort: { sortOrder in
+                focusColumn()
+                viewModel.sortOrder = sortOrder
+            },
+            onOpen: { item in
+                focusColumn()
+                viewModel.openItem(item)
+            },
+            onBeginRename: {
+                guard let item = viewModel.selectedItem else { return }
+                focusColumn()
+                onRename(item)
+            },
+            onFocus: focusColumn,
+            onQuickLook: {
+                focusColumn()
+                onQuickLook()
+            },
+            onBeginFiltering: onBeginFiltering,
+            onDelete: {
+                focusColumn()
+                viewModel.deleteSelected()
+            },
+            onDrop: { urls, destination in
+                focusColumn()
+                viewModel.transferDroppedItems(
+                    urls,
+                    into: destination,
+                    operation: FileDropModifierKeys.operation(for: urls, into: destination)
+                )
             }
-        }
-        .listStyle(.plain)
-        .overlay {
-            FileTableRangeSelectionMonitor(
-                itemIDs: viewModel.visibleItems.map(\.id),
-                selection: focusedSelection
-            )
-            .allowsHitTesting(false)
-        }
-        .focused($hasKeyboardFocus)
-        .contextMenu(forSelectionType: FileItem.ID.self) { selection in
+        )
+        .contextMenu {
             FinderItemsContextMenu(
                 viewModel: viewModel,
-                selection: selection,
+                selection: viewModel.selectedItems,
                 canTransferToAdjacentPane: canTransferToAdjacentPane,
                 onFocus: focusColumn,
                 onQuickLook: onQuickLook,
@@ -84,49 +115,6 @@ struct FileColumnView: View {
                 onCopyToAdjacentPane: onCopyToAdjacentPane,
                 onMoveToAdjacentPane: onMoveToAdjacentPane
             )
-        } primaryAction: { selection in
-            open(selection: selection)
-        }
-        .onKeyPress(KeyEquivalent("/")) {
-            onBeginFiltering()
-            return .handled
-        }
-        .onKeyPress(.space) {
-            focusColumn()
-            onQuickLook()
-            return .handled
-        }
-        .onKeyPress(.return, phases: .down) { _ in
-            guard let item = viewModel.selectedItem else { return .ignored }
-            focusColumn()
-            onRename(item)
-            return .handled
-        }
-        .onKeyPress(KeyEquivalent("o"), phases: .down) { keyPress in
-            guard keyPress.modifiers.contains(.command) else { return .ignored }
-            open(selection: viewModel.selectedItems)
-            return .handled
-        }
-        .onKeyPress(.delete, phases: .down) { keyPress in
-            guard keyPress.modifiers.contains(.command) else { return .ignored }
-            focusColumn()
-            viewModel.deleteSelected()
-            return .handled
-        }
-        .onKeyPress(.rightArrow, phases: .down) { keyPress in
-            guard keyPress.modifiers.isEmpty,
-                  let item = viewModel.selectedItem,
-                  item.isDirectory,
-                  !item.isPackage else { return .ignored }
-            focusColumn()
-            viewModel.openItem(item)
-            return .handled
-        }
-        .onKeyPress(.leftArrow, phases: .down) { keyPress in
-            guard keyPress.modifiers.isEmpty, viewModel.canGoUp else { return .ignored }
-            focusColumn()
-            viewModel.goUp()
-            return .handled
         }
     }
 
@@ -141,7 +129,7 @@ struct FileColumnView: View {
     @ViewBuilder
     private func row(for item: FileItem, gitIndex: GitChangeIndex?) -> some View {
         let content = HStack(spacing: 7) {
-            Image(nsImage: IconCache.shared.icon(for: item.url.path))
+            Image(nsImage: IconCache.shared.icon(for: item))
                 .resizable()
                 .interpolation(.high)
                 .frame(width: 18, height: 18)
@@ -185,32 +173,18 @@ struct FileColumnView: View {
         }
 
         if item.isDirectory && !item.isPackage {
-            if FileDropSafety.canStartDragging(item) {
-                content
-                    .onDrag { dragProvider(for: item) }
-                    .dropDestination(
-                        for: DroppedFileURL.self,
-                        action: { droppedItems, _ in
-                            transferDroppedItems(droppedItems, into: item.url)
-                        },
-                        isTargeted: { targeted in
-                            dropTargetID = targeted ? item.id : nil
-                        }
-                    )
-                    .background(dropTargetID == item.id ? Color.accentColor.opacity(0.16) : .clear)
-            } else {
-                content
-                    .dropDestination(
-                        for: DroppedFileURL.self,
-                        action: { droppedItems, _ in
-                            transferDroppedItems(droppedItems, into: item.url)
-                        },
-                        isTargeted: { targeted in
-                            dropTargetID = targeted ? item.id : nil
-                        }
-                    )
-                    .background(dropTargetID == item.id ? Color.accentColor.opacity(0.16) : .clear)
-            }
+            content
+                .onDrag { dragProvider(for: item) }
+                .dropDestination(
+                    for: DroppedFileURL.self,
+                    action: { droppedItems, _ in
+                        transferDroppedItems(droppedItems, into: item.url)
+                    },
+                    isTargeted: { targeted in
+                        dropTargetID = targeted ? item.id : nil
+                    }
+                )
+                .background(dropTargetID == item.id ? Color.accentColor.opacity(0.16) : .clear)
         } else if FileDropSafety.canStartDragging(item) {
             content.onDrag { dragProvider(for: item) }
         } else {
@@ -261,11 +235,10 @@ struct FileColumnView: View {
         let draggedItems = viewModel.selectedItems.contains(item.id)
             ? viewModel.selectedFileItems
             : [item]
-        guard draggedItems.allSatisfy({ FileDropSafety.canStartDragging($0) }) else {
-            return NSItemProvider()
-        }
-        return FileDragProvider.provider(for: draggedItems.map(\.url))
-            ?? NSItemProvider(object: item.url as NSURL)
+        return FileDragProvider.provider(
+            for: draggedItems.map(\.url),
+            primaryIsDirectory: draggedItems.first?.isDirectory == true && draggedItems.first?.isPackage != true
+        ) ?? NSItemProvider(object: item.url as NSURL)
     }
 
     private func transferDroppedItems(_ items: [DroppedFileURL], into destination: URL) -> Bool {

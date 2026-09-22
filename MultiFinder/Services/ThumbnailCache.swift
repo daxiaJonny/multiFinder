@@ -127,7 +127,9 @@ final class ThumbnailCache {
             return cached
         }
 
-        let fallback = systemIcon(for: key.url, size: size)
+        let fallback = isDirectory && !isPackage
+            ? folderIcon(size: size)
+            : systemIcon(for: key.url, size: size)
         guard !key.usesSystemIcon, !Task.isCancelled else {
             store(fallback, forKey: cacheKey, size: size)
             return fallback
@@ -179,6 +181,12 @@ final class ThumbnailCache {
 
     func fallbackIcon(for url: URL, size: CGSize) -> NSImage {
         systemIcon(for: url.standardizedFileURL, size: size)
+    }
+
+    private func folderIcon(size: CGSize) -> NSImage {
+        let icon = (workspace.icon(for: .folder).copy() as? NSImage) ?? NSImage()
+        icon.size = NSSize(width: max(size.width, 1), height: max(size.height, 1))
+        return icon
     }
 
     private func systemIcon(for url: URL, size: CGSize) -> NSImage {

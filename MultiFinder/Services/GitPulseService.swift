@@ -84,6 +84,8 @@ public final class GitPulseStore: ObservableObject {
     private static let automaticRefreshInterval: TimeInterval = 30
 
     @Published public private(set) var cache: [String: GitStatusInfo] = [:]
+    /// Increments only when a status result is published.
+    @Published private(set) var generation: UInt64 = 0
     private var inFlightPaths: Set<String> = []
     private var nonRepoPaths: Set<String> = []
     private var repoRootByDirectory: [String: URL] = [:]
@@ -91,6 +93,26 @@ public final class GitPulseStore: ObservableObject {
     private var lastCheckTime: [String: Date] = [:]
 
     public init() {}
+
+    /// Reads a cached status without starting `git status`. Drawing uses this.
+    public func cachedStatus(for url: URL?) -> GitStatusInfo? {
+        guard let directory = url?.standardizedFileURL else { return nil }
+        guard findRepoRoot(for: directory) != nil else { return nil }
+        return cache[cacheKey(for: directory)]
+    }
+
+    /// Reads the directory index without starting `git status`.
+    func cachedChangeIndex(for url: URL?) -> GitChangeIndex? {
+        guard let directory = url?.standardizedFileURL else { return nil }
+        guard let status = cachedStatus(for: directory) else { return nil }
+        let key = cacheKey(for: directory)
+        if let index = changeIndexes[key] {
+            return index
+        }
+        let index = GitChangeIndex(status: status)
+        changeIndexes[key] = index
+        return index
+    }
 
     /// Returns cached status for the viewed directory, or starts a background fetch.
     public func status(for url: URL?) -> GitStatusInfo? {
@@ -156,17 +178,35 @@ public final class GitPulseStore: ObservableObject {
         lastCheckTime[key] = Date()
         let relativePath = scope.relativePath
 
-        Task.detached(priority: .userInitiated) { [weak self, repoRoot, key, relativePath] in
-            let status = await Self.queryGitStatus(at: repoRoot, relativePath: relativePath)
+        Task.detached(priority: .utility) { [weak self, repoRoot, key, relativePath] in
+            // Branch and tracked edits first. Untracked files are a second, slower walk.
+            let tracked = await Self.queryGitStatus(
+                at: repoRoot,
+                relativePath: relativePath,
+                includeUntracked: false
+            )
             await MainActor.run {
-                guard let self = self else { return }
+                self?.publish(tracked, for: key)
+            }
+            let full = await Self.queryGitStatus(
+                at: repoRoot,
+                relativePath: relativePath,
+                includeUntracked: true
+            )
+            await MainActor.run {
+                guard let self else { return }
                 self.inFlightPaths.remove(key)
-                guard let status else { return }
-                guard self.cache[key] != status else { return }
-                self.cache[key] = status
-                self.changeIndexes[key] = GitChangeIndex(status: status)
+                self.publish(full, for: key)
             }
         }
+    }
+
+    private func publish(_ status: GitStatusInfo?, for key: String) {
+        guard let status else { return }
+        guard cache[key] != status else { return }
+        cache[key] = status
+        changeIndexes[key] = GitChangeIndex(status: status)
+        generation &+= 1
     }
 
     /// Viewed-directory path. The repo root is not reused as the key for a subdirectory.
@@ -273,11 +313,20 @@ public final class GitPulseStore: ObservableObject {
 
     // MARK: - Background Worker
 
-    private static func queryGitStatus(at repoRoot: URL, relativePath: String?) async -> GitStatusInfo? {
+    private static func queryGitStatus(
+        at repoRoot: URL,
+        relativePath: String?,
+        includeUntracked: Bool
+    ) async -> GitStatusInfo? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         // Porcelain paths stay relative to the repo root; the pathspec only limits the report.
-        var arguments = ["status", "--porcelain=v1", "-b"]
+        var arguments = [
+            "status",
+            "--porcelain=v1",
+            "-b",
+            includeUntracked ? "--untracked-files=normal" : "--untracked-files=no"
+        ]
         if let relativePath {
             arguments.append("--")
             arguments.append(relativePath)

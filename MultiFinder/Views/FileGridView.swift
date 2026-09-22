@@ -58,116 +58,42 @@ struct FileGridView: View {
     }
 
     var body: some View {
-        GeometryReader { geometry in
-            ScrollViewReader { scrollProxy in
-                ScrollView {
-                    LazyVGrid(
-                        columns: Self.gridColumns(for: geometry.size.width),
-                        alignment: .leading,
-                        spacing: 14
-                    ) {
-                        let gitIndex = gitPulse.changeIndex(for: viewModel.currentURL)
-                        ForEach(viewModel.visibleItems) { item in
-                            gridCell(for: item, gitIndex: gitIndex)
-                                .id(item.id)
-                        }
-                    }
-                    .padding(.horizontal, Self.gridHorizontalPadding)
-                    .padding(.vertical, 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .background(Color(nsColor: .textBackgroundColor))
-                .background(alignment: .topLeading) {
-                    FileGridKeyboardFocusView(
-                        focusRequest: keyboardFocusRequest,
-                        shouldFocus: inlineRenameItem == nil,
-                        onKeyDown: { event in
-                            handleKeyDown(
-                                event,
-                                columns: Self.columnCount(for: geometry.size.width),
-                                scrollProxy: scrollProxy
-                            )
-                        }
-                    )
-                    .frame(width: 1, height: 1)
-                    .allowsHitTesting(false)
-                }
-                .contextMenu {
-                    fileContextMenu(selection: viewModel.selectedItems)
-                }
-                .coordinateSpace(name: fileGridCoordinateSpaceName)
-                .overlay(alignment: .topLeading) {
-                    if let marqueeRect {
-                        Rectangle()
-                            .fill(Color.accentColor.opacity(0.1))
-                            .overlay {
-                                Rectangle()
-                                    .stroke(Color.accentColor.opacity(0.8), lineWidth: 1)
-                            }
-                            .frame(
-                                width: max(marqueeRect.width, 1),
-                                height: max(marqueeRect.height, 1)
-                            )
-                            .position(x: marqueeRect.midX, y: marqueeRect.midY)
-                            .allowsHitTesting(false)
-                    }
-                }
-                .overlay {
-                    FileGridContextMenuSelectionMonitor { point in
-                        selectItemForContextMenu(at: point)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .allowsHitTesting(false)
-                }
-                .simultaneousGesture(
-                    SpatialTapGesture(coordinateSpace: .named(fileGridCoordinateSpaceName))
-                        .onEnded { value in
-                            clearSelectionIfBlank(at: value.location)
-                        }
+        let gitIndex = gitPulse.cachedChangeIndex(for: viewModel.currentURL)
+        VirtualFileGrid(
+            items: viewModel.visibleItems,
+            itemsRevision: viewModel.itemsRevision,
+            selection: viewModel.selectedItems,
+            gitIndex: gitIndex,
+            gitGeneration: gitPulse.generation,
+            onSelection: { selection in
+                onFocus()
+                viewModel.selectedItems = selection
+            },
+            onOpen: { item in
+                onFocus()
+                viewModel.openItem(item)
+            },
+            onFocus: onFocus,
+            onQuickLook: {
+                onFocus()
+                onQuickLook()
+            },
+            onBeginFiltering: onBeginFiltering,
+            onDelete: {
+                onFocus()
+                viewModel.deleteSelected()
+            },
+            onDrop: { urls, destination in
+                onFocus()
+                viewModel.transferDroppedItems(
+                    urls,
+                    into: destination,
+                    operation: FileDropModifierKeys.operation(for: urls, into: destination)
                 )
-                .simultaneousGesture(
-                    DragGesture(
-                        minimumDistance: 4,
-                        coordinateSpace: .named(fileGridCoordinateSpaceName)
-                    )
-                    .onChanged(updateMarquee)
-                    .onEnded { value in
-                        endMarquee(at: value.location)
-                    }
-                )
-                .onPreferenceChange(FileGridCellFramePreferenceKey.self) { frames in
-                    cellFrames = frames
-                }
-                .onChange(of: viewModel.location) { _, _ in
-                    selectionAnchor = nil
-                    selectionCursor = nil
-                    dropTargetID = nil
-                    cellFrames = [:]
-                }
-                .onChange(of: viewModel.tableRevision) { _, _ in
-                    let visibleIDs = Set(viewModel.visibleItems.map(\.id))
-                    if let selectionAnchor, !visibleIDs.contains(selectionAnchor) {
-                        self.selectionAnchor = nil
-                    }
-                    if let selectionCursor, !visibleIDs.contains(selectionCursor) {
-                        self.selectionCursor = nil
-                    }
-                    if let dropTargetID, !visibleIDs.contains(dropTargetID) {
-                        self.dropTargetID = nil
-                    }
-                    cellFrames = cellFrames.filter { visibleIDs.contains($0.key) }
-                    if let inlineRenameItem,
-                       !visibleIDs.contains(inlineRenameItem.id) {
-                        finishInlineRename(commit: false)
-                    }
-                }
-                .onChange(of: viewModel.selectedItems) { _, selection in
-                    if selection.isEmpty {
-                        selectionAnchor = nil
-                        selectionCursor = nil
-                    }
-                }
             }
+        )
+        .contextMenu {
+            fileContextMenu(selection: viewModel.selectedItems)
         }
     }
 
@@ -216,20 +142,9 @@ struct FileGridView: View {
         }
 
         if item.isDirectory && !item.isPackage {
-            if FileDropSafety.canStartDragging(item) {
-                base
-                    .onDrag { beginDragging(item) }
-                    .dropDestination(
-                        for: DroppedFileURL.self,
-                        action: { droppedItems, _ in
-                            transferDroppedItems(droppedItems, into: item.url)
-                        },
-                        isTargeted: { isTargeted in
-                            updateDropTarget(item, isTargeted: isTargeted)
-                        }
-                    )
-            } else {
-                base.dropDestination(
+            base
+                .onDrag { beginDragging(item) }
+                .dropDestination(
                     for: DroppedFileURL.self,
                     action: { droppedItems, _ in
                         transferDroppedItems(droppedItems, into: item.url)
@@ -238,7 +153,6 @@ struct FileGridView: View {
                         updateDropTarget(item, isTargeted: isTargeted)
                     }
                 )
-            }
         } else if FileDropSafety.canStartDragging(item) {
             base.onDrag { beginDragging(item) }
         } else {
@@ -598,11 +512,10 @@ struct FileGridView: View {
         let dragItems = viewModel.selectedItems.contains(item.id)
             ? viewModel.selectedFileItems
             : [item]
-        guard dragItems.allSatisfy({ FileDropSafety.canStartDragging($0) }) else {
-            return NSItemProvider()
-        }
-        return FileDragProvider.provider(for: dragItems.map(\.url))
-            ?? NSItemProvider(object: item.url as NSURL)
+        return FileDragProvider.provider(
+            for: dragItems.map(\.url),
+            primaryIsDirectory: dragItems.first?.isDirectory == true && dragItems.first?.isPackage != true
+        ) ?? NSItemProvider(object: item.url as NSURL)
     }
 
     private func updateDropTarget(_ item: FileItem, isTargeted: Bool) {

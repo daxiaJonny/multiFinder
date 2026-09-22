@@ -30,11 +30,19 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     let id = UUID()
 
     @Published private(set) var location: BrowserLocation
-    @Published private(set) var items: [FileItem] = []
+    @Published private(set) var items: [FileItem] = [] {
+        didSet {
+            visibleItemsCacheValid = false
+            itemsRevision &+= 1
+        }
+    }
+    /// Bumps only when `items` is replaced. Selection updates must not.
+    @Published private(set) var itemsRevision: UInt64 = 0
     @Published private(set) var tableRevision: UInt64 = 0
     @Published var selectedItems: Set<FileItem.ID> = []
     @Published var filterText = "" {
         didSet {
+            visibleItemsCacheValid = false
             let previousVisibleIDs = visibleItemIDs(in: items, filterText: oldValue)
             let currentVisibleIDs = visibleItemIDs(in: items, filterText: filterText)
             selectedItems.formIntersection(currentVisibleIDs)
@@ -111,16 +119,20 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     }
 
     var visibleItems: [FileItem] {
-        Self.visibleItems(
-            in: items,
-            filterText: filterText,
-            restrictingTo: gitRestrictionIDs
-        )
+        if !visibleItemsCacheValid {
+            cachedVisibleItems = Self.visibleItems(
+                in: items,
+                filterText: filterText,
+                restrictingTo: gitRestrictionIDs
+            )
+            visibleItemsCacheValid = true
+        }
+        return cachedVisibleItems
     }
 
     private var gitRestrictionIDs: Set<FileItem.ID>? {
         guard showsOnlyGitChanges, let currentURL else { return nil }
-        guard let index = GitPulseStore.shared.changeIndex(for: currentURL) else { return nil }
+        guard let index = GitPulseStore.shared.cachedChangeIndex(for: currentURL) else { return nil }
         return Set(items.compactMap { item in
             index.changeType(for: item.url) == nil ? nil : item.id
         })
@@ -139,6 +151,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     private let directoryMonitor = DirectoryMonitor()
     private var loadTask: Task<Void, Never>?
     private var monitorRefreshTask: Task<Void, Never>?
+    private var pendingMonitorURLs: [URL] = []
     private var aiPlanTask: Task<Void, Never>?
     private var aiAnswerTask: Task<Void, Never>?
     private var aiPlanRequestID: UUID?
@@ -147,7 +160,10 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     private var loadGeneration: UInt64 = 0
     private var pendingSelectionURLs: Set<URL> = []
     private var gitStatusCancellable: AnyCancellable?
+    private var gitPollingTask: Task<Void, Never>?
     private var lastGitFilteredIDs: Set<FileItem.ID> = []
+    private var cachedVisibleItems: [FileItem] = []
+    private var visibleItemsCacheValid = false
 
     init(
         location: BrowserLocation = .directory(FileManager.default.homeDirectoryForCurrentUser),
@@ -185,6 +201,13 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
                 }
         }
         configureDirectoryMonitor()
+        gitPollingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                guard let self else { return }
+                GitPulseStore.shared.refresh(for: self.currentURL)
+            }
+        }
         gitStatusCancellable = GitPulseStore.shared.$cache
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
@@ -200,6 +223,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     deinit {
         loadTask?.cancel()
         monitorRefreshTask?.cancel()
+        gitPollingTask?.cancel()
         aiPlanTask?.cancel()
         aiAnswerTask?.cancel()
     }
@@ -217,6 +241,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         if !preservingError {
             errorMessage = nil
         }
+        GitPulseStore.shared.refresh(for: currentURL)
 
         loadTask = Task { [weak self] in
             guard let self else { return }
@@ -224,7 +249,13 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
                 let loadedItems: [FileItem]
                 switch requestedLocation {
                 case .directory(let url):
-                    loadedItems = try await Self.loadDirectory(at: url, includeHidden: includeHidden)
+                    try await loadDirectoryProgressively(
+                        at: url,
+                        includeHidden: includeHidden,
+                        generation: requestGeneration,
+                        requestedLocation: requestedLocation
+                    )
+                    return
                 case .recents, .search:
                     let urls = try await metadataURLs(for: requestedLocation, includeHidden: includeHidden)
                     loadedItems = try await Self.makeItems(from: urls, includeHidden: includeHidden)
@@ -274,6 +305,62 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         items.sorted { comparator.compare($0, $1) == .orderedAscending }
     }
 
+    /// Publishes the first batch as soon as it is readable, then the rest.
+    private func loadDirectoryProgressively(
+        at url: URL,
+        includeHidden: Bool,
+        generation: UInt64,
+        requestedLocation: BrowserLocation
+    ) async throws {
+        let names = try await Task.detached {
+            try FileManager.default.contentsOfDirectory(atPath: url.path)
+        }.value
+        let visibleNames = includeHidden ? names : names.filter { !$0.hasPrefix(".") }
+        guard loadGeneration == generation, location == requestedLocation else { return }
+        let comparator = sortOrder.first ?? FileItemComparator(field: .name)
+        let firstCount = min(400, visibleNames.count)
+        let first = try await Self.makeFileItems(
+            named: Array(visibleNames.prefix(firstCount)),
+            in: url,
+            includeHidden: includeHidden
+        )
+        guard loadGeneration == generation, location == requestedLocation else { return }
+        applyLoadedItems(Self.sort(items: first, using: comparator))
+        isLoading = firstCount < visibleNames.count
+        guard firstCount < visibleNames.count else {
+            isLoading = false
+            return
+        }
+        let rest = try await Self.makeFileItems(
+            named: Array(visibleNames.dropFirst(firstCount)),
+            in: url,
+            includeHidden: includeHidden
+        )
+        try Task.checkCancellation()
+        guard loadGeneration == generation, location == requestedLocation else { return }
+        applyLoadedItems(Self.sort(items: first + rest, using: comparator))
+        isLoading = false
+    }
+
+    private nonisolated static func makeFileItems(
+        named names: [String],
+        in directory: URL,
+        includeHidden: Bool
+    ) async throws -> [FileItem] {
+        try await Task.detached {
+            var items: [FileItem] = []
+            items.reserveCapacity(names.count)
+            for (index, name) in names.enumerated() {
+                if index.isMultiple(of: 64) { try Task.checkCancellation() }
+                let item = FileItem(url: directory.appendingPathComponent(name))
+                if includeHidden || !item.isHidden {
+                    items.append(item)
+                }
+            }
+            return items
+        }.value
+    }
+
     private nonisolated static func loadDirectory(at url: URL, includeHidden: Bool) async throws -> [FileItem] {
         let worker = Task.detached(priority: .userInitiated) {
             let urls = try FileManager.default.contentsOfDirectory(
@@ -320,6 +407,9 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     }
 
     private func applyLoadedItems(_ loadedItems: [FileItem]) {
+        if loadedItems == items, pendingSelectionURLs.isEmpty {
+            return
+        }
         let rowIdentityChanged = !items.elementsEqual(loadedItems) { $0.id == $1.id }
         let visibleIDs = visibleItemIDs(in: loadedItems, filterText: filterText)
         let nextSelection: Set<FileItem.ID>
@@ -351,6 +441,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
     }
 
     private func applyGitChangeFilter() {
+        visibleItemsCacheValid = false
         let visible = visibleItemIDs(in: items, filterText: filterText)
         selectedItems.formIntersection(visible)
         lastGitFilteredIDs = visible
@@ -359,6 +450,7 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
 
     private func refreshGitChangeFilter() {
         guard showsOnlyGitChanges else { return }
+        visibleItemsCacheValid = false
         let visible = visibleItemIDs(in: items, filterText: filterText)
         guard visible != lastGitFilteredIDs || !selectedItems.isSubset(of: visible) else { return }
         selectedItems.formIntersection(visible)
@@ -1209,21 +1301,95 @@ final class FileBrowserViewModel: ObservableObject, Identifiable {
         monitorRefreshTask?.cancel()
         directoryMonitor.cancel()
         guard let currentURL else { return }
-        directoryMonitor.watch(currentURL) { [weak self] in
-            self?.scheduleMonitoredRefresh()
+        directoryMonitor.watch(currentURL) { [weak self] urls in
+            self?.scheduleMonitoredRefresh(urls)
         }
     }
 
-    private func scheduleMonitoredRefresh() {
+    private func scheduleMonitoredRefresh(_ urls: [URL]) {
+        pendingMonitorURLs.append(contentsOf: urls)
         monitorRefreshTask?.cancel()
         monitorRefreshTask = Task { [weak self] in
             do {
-                try await Task.sleep(for: .milliseconds(350))
-                guard !Task.isCancelled else { return }
-                self?.reload(preservingError: true)
+                try await Task.sleep(for: .milliseconds(250))
+                guard let self, !Task.isCancelled else { return }
+                let batch = self.pendingMonitorURLs
+                self.pendingMonitorURLs.removeAll()
+                self.applyMonitoredChanges(batch)
             } catch {
                 // A subsequent filesystem event replaced this debounce task.
             }
         }
+    }
+
+    /// Updates only the children named by file events. A bare directory event falls back to a name diff.
+    private func applyMonitoredChanges(_ urls: [URL]) {
+        guard case .directory(let current) = location else {
+            reload(preservingError: true)
+            return
+        }
+        let directory = current.standardizedFileURL
+        let children = Array(Set(urls.map(\.standardizedFileURL).filter {
+            $0.deletingLastPathComponent().standardizedFileURL == directory
+        }))
+        if children.isEmpty {
+            applyNameDiff(in: directory)
+            return
+        }
+        var next = items
+        var changed = false
+        for child in children {
+            let exists = FileManager.default.fileExists(atPath: child.path)
+            if !exists {
+                let before = next.count
+                next.removeAll { $0.url.standardizedFileURL == child }
+                changed = changed || next.count != before
+                continue
+            }
+            let item = FileItem(url: child)
+            if !showHiddenFiles && item.isHidden {
+                let before = next.count
+                next.removeAll { $0.url.standardizedFileURL == child }
+                changed = changed || next.count != before
+                continue
+            }
+            if let index = next.firstIndex(where: { $0.url.standardizedFileURL == child }) {
+                if next[index] != item {
+                    next[index] = item
+                    changed = true
+                }
+            } else {
+                next.append(item)
+                changed = true
+            }
+        }
+        guard changed else { return }
+        let comparator = sortOrder.first ?? FileItemComparator(field: .name)
+        applyLoadedItems(Self.sort(items: next, using: comparator))
+    }
+
+    private func applyNameDiff(in directory: URL) {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else {
+            reload(preservingError: true)
+            return
+        }
+        let allowed = Set(showHiddenFiles ? names : names.filter { !$0.hasPrefix(".") })
+        let existingNames = Set(items.map(\.name))
+        guard allowed != existingNames else { return }
+        var next: [FileItem] = []
+        next.reserveCapacity(allowed.count)
+        let existing = Dictionary(items.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        for name in allowed {
+            if let item = existing[name] {
+                next.append(item)
+            } else {
+                let item = FileItem(url: directory.appendingPathComponent(name))
+                if showHiddenFiles || !item.isHidden {
+                    next.append(item)
+                }
+            }
+        }
+        let comparator = sortOrder.first ?? FileItemComparator(field: .name)
+        applyLoadedItems(Self.sort(items: next, using: comparator))
     }
 }

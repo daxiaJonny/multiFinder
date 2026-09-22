@@ -67,6 +67,8 @@
 		C40389656CB2CB9DFE97DF00 /* GitPulsePopoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A939D89691604204D08A82CD /* GitPulsePopoverView.swift */; };
 		C4B46A25E9E2708CBAFB58A0 /* FileGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 162C31A648164F2EF6FA987B /* FileGridView.swift */; };
 		C7950892B535B8EA18D84EE3 /* FileListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67D8DABCB154486D40A867DD /* FileListView.swift */; };
+		A1B2C3D4E5F60718293A4B5C /* VirtualFileTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5C4D3E2F1A60718293A4B5C /* VirtualFileTable.swift */; };
+		C3D4E5F60718293A4B5CA1B2 /* VirtualFileGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F60718293A4B5CA1B2C3 /* VirtualFileGrid.swift */; };
 		C8E0BFCF65FBD1477476837F /* LocalizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33030F91A45C52D555DD1C10 /* LocalizationTests.swift */; };
 		CA7E5F6EACCB6F7FE42904A7 /* FileMetadataServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B92BFD9AF0144028F5072B5 /* FileMetadataServiceTests.swift */; };
 		CAE339243599E051B30B878A /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66974D5EFC9F3483AB579493 /* SettingsView.swift */; };
@@ -145,6 +147,8 @@
 		65517EA866D848DE0A065B22 /* ThumbnailCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThumbnailCacheTests.swift; sourceTree = "<group>"; };
 		66974D5EFC9F3483AB579493 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		67D8DABCB154486D40A867DD /* FileListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileListView.swift; sourceTree = "<group>"; };
+		B5C4D3E2F1A60718293A4B5C /* VirtualFileTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualFileTable.swift; sourceTree = "<group>"; };
+		D4E5F60718293A4B5CA1B2C3 /* VirtualFileGrid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualFileGrid.swift; sourceTree = "<group>"; };
 		69352263F3CBCD8CFC42EFB3 /* MultiFinder.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MultiFinder.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6A8B0E1D188042F4AB5DA195 /* AIPlanPreviewSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIPlanPreviewSheet.swift; sourceTree = "<group>"; };
 		6A9369B617193F78DD1E348A /* StashShelfStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StashShelfStore.swift; sourceTree = "<group>"; };
@@ -304,6 +308,8 @@
 				38383EA7AC461C02EA1C8A1E /* FileGalleryView.swift */,
 				162C31A648164F2EF6FA987B /* FileGridView.swift */,
 				67D8DABCB154486D40A867DD /* FileListView.swift */,
+				B5C4D3E2F1A60718293A4B5C /* VirtualFileTable.swift */,
+				D4E5F60718293A4B5CA1B2C3 /* VirtualFileGrid.swift */,
 				9D488641EB02127DEDD29A4D /* GitPulseBadgeView.swift */,
 				A939D89691604204D08A82CD /* GitPulsePopoverView.swift */,
 				44C74987A896C663C2A6A47D /* InfoPanel.swift */,
@@ -549,6 +555,8 @@
 				C4B46A25E9E2708CBAFB58A0 /* FileGridView.swift in Sources */,
 				94A94C23D9FC00A87F160196 /* FileItem.swift in Sources */,
 				C7950892B535B8EA18D84EE3 /* FileListView.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5C /* VirtualFileTable.swift in Sources */,
+				C3D4E5F60718293A4B5CA1B2 /* VirtualFileGrid.swift in Sources */,
 				8ED3A9E1AB8FE345C63EC1BB /* FileMetadataService.swift in Sources */,
 				308DED3CD454343FB4D3EA10 /* FileOpeningService.swift in Sources */,
 				42F08FB46FB4D42E172AF033 /* FileOperationService.swift in Sources */,

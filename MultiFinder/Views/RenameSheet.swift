@@ -15,7 +15,7 @@ struct RenameSheet: View {
     var body: some View {
         VStack(spacing: 16) {
             HStack {
-                Image(nsImage: IconCache.shared.icon(for: item.url.path))
+                Image(nsImage: IconCache.shared.icon(for: item))
                     .resizable()
                     .frame(width: 32, height: 32)
                 Text("Rename")

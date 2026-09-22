@@ -10,12 +10,30 @@ final class IconCache {
         cache.countLimit = 2000
     }
 
+    func icon(for item: FileItem) -> NSImage {
+        if item.isDirectory && !item.isPackage {
+            return folderIcon
+        }
+        return icon(for: item.url.path)
+    }
+
     func icon(for path: String) -> NSImage {
         let key = path as NSString
         if let cached = cache.object(forKey: key) {
             return cached
         }
         let icon = iconWithoutStat(for: path) ?? NSWorkspace.shared.icon(forFile: path)
+        icon.size = NSSize(width: 16, height: 16)
+        cache.setObject(icon, forKey: key)
+        return icon
+    }
+
+    private var folderIcon: NSImage {
+        let key = "__folder__" as NSString
+        if let cached = cache.object(forKey: key) {
+            return cached
+        }
+        let icon = (NSWorkspace.shared.icon(for: .folder).copy() as? NSImage) ?? NSImage()
         icon.size = NSSize(width: 16, height: 16)
         cache.setObject(icon, forKey: key)
         return icon
